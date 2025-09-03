@@ -70,10 +70,24 @@ impl Browser {
                 self.ui.render(&self.current_state)?;
             },
             Err(e) => {
-                self.current_state = UIState::Error {
-                    message: format!("Failed to load page: {}", e),
-                };
-                self.ui.render(&self.current_state)?;
+                // Try to get URL suggestions from AI
+                match self.get_url_suggestions(url, &e.to_string()).await {
+                    Ok(suggestions) if !suggestions.is_empty() => {
+                        self.current_state = UIState::URLSuggestions {
+                            original_url: url.to_string(),
+                            error_message: e.to_string(),
+                            suggestions,
+                            selected_index: 0,
+                        };
+                        self.ui.render(&self.current_state)?;
+                    }
+                    _ => {
+                        self.current_state = UIState::Error {
+                            message: format!("Failed to load page: {}", e),
+                        };
+                        self.ui.render(&self.current_state)?;
+                    }
+                }
             }
         }
         
@@ -226,6 +240,65 @@ impl Browser {
                     self.current_state = UIState::URLInput { input: self.url_input.clone() };
                     self.ui.render(&self.current_state)?;
                 },
+                
+                UserAction::SelectPrevSuggestion => {
+                    if let UIState::URLSuggestions { original_url, error_message, suggestions, selected_index } = &self.current_state {
+                        let new_index = if *selected_index > 0 { 
+                            *selected_index - 1 
+                        } else { 
+                            suggestions.len().saturating_sub(1) 
+                        };
+                        self.current_state = UIState::URLSuggestions {
+                            original_url: original_url.clone(),
+                            error_message: error_message.clone(),
+                            suggestions: suggestions.clone(),
+                            selected_index: new_index,
+                        };
+                        self.ui.render(&self.current_state)?;
+                    }
+                },
+                
+                UserAction::SelectNextSuggestion => {
+                    if let UIState::URLSuggestions { original_url, error_message, suggestions, selected_index } = &self.current_state {
+                        let new_index = if *selected_index < suggestions.len().saturating_sub(1) { 
+                            *selected_index + 1 
+                        } else { 
+                            0 
+                        };
+                        self.current_state = UIState::URLSuggestions {
+                            original_url: original_url.clone(),
+                            error_message: error_message.clone(),
+                            suggestions: suggestions.clone(),
+                            selected_index: new_index,
+                        };
+                        self.ui.render(&self.current_state)?;
+                    }
+                },
+                
+                UserAction::ConfirmSuggestion => {
+                    if let UIState::URLSuggestions { suggestions, selected_index, .. } = &self.current_state {
+                        if let Some(selected_url) = suggestions.get(*selected_index) {
+                            let url_to_navigate = selected_url.clone();
+                            self.navigate(&url_to_navigate).await?;
+                        }
+                    }
+                },
+                
+                UserAction::DismissError => {
+                    // Return to previous state or URL input
+                    if let Some(current) = self.history.current() {
+                        self.current_state = UIState::Page {
+                            url: current.url.clone(),
+                            title: current.title.clone(),
+                            summary: "Use 'r' to refresh for summary".to_string(),
+                            links: self.current_links.clone(),
+                        };
+                        self.ui.render(&self.current_state)?;
+                    } else {
+                        self.current_state = UIState::URLInput { input: String::new() };
+                        self.ui.render(&self.current_state)?;
+                    }
+                },
             }
         }
         
@@ -278,6 +351,72 @@ impl Browser {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
         Ok(())
+    }
+    
+    async fn get_url_suggestions(&self, failed_url: &str, error_message: &str) -> Result<Vec<String>> {
+        match self.openai.suggest_urls(failed_url, error_message).await {
+            Ok(suggestions) => Ok(suggestions),
+            Err(_) => {
+                // Fallback to basic suggestions if AI fails
+                Ok(self.generate_fallback_suggestions(failed_url))
+            }
+        }
+    }
+    
+    fn generate_fallback_suggestions(&self, failed_url: &str) -> Vec<String> {
+        let mut suggestions = Vec::new();
+        let url_lower = failed_url.to_lowercase();
+        let clean_input = failed_url.trim();
+        
+        // If it already has a protocol but failed, try variations
+        if url_lower.starts_with("http") {
+            // Try with www if missing
+            if !url_lower.contains("www.") {
+                if let Ok(parsed) = url::Url::parse(&url_lower) {
+                    if let Some(host) = parsed.host_str() {
+                        suggestions.push(format!("{}://www.{}{}", parsed.scheme(), host, parsed.path()));
+                    }
+                }
+            }
+        } else {
+            // For single words or incomplete URLs, add common patterns
+            if !clean_input.contains('.') {
+                // Common domain extensions for single words
+                suggestions.push(format!("https://www.{}.com", clean_input));
+                suggestions.push(format!("https://{}.com", clean_input));
+                suggestions.push(format!("https://www.{}.org", clean_input));
+                suggestions.push(format!("https://www.{}.net", clean_input));
+                suggestions.push(format!("https://{}.io", clean_input));
+            } else {
+                // Has a dot, just add protocol
+                suggestions.push(format!("https://www.{}", clean_input));
+                suggestions.push(format!("https://{}", clean_input));
+                suggestions.push(format!("http://www.{}", clean_input));
+                suggestions.push(format!("http://{}", clean_input));
+            }
+        }
+        
+        // Validate all suggestions and keep only valid ones
+        suggestions
+            .into_iter()
+            .filter(|url| self.is_valid_url_format(url))
+            .take(5)
+            .collect()
+    }
+    
+    fn is_valid_url_format(&self, url: &str) -> bool {
+        use url::Url;
+        
+        if let Ok(parsed) = Url::parse(url) {
+            if let Some(host) = parsed.host_str() {
+                // Must have a dot in the host and be at least 3 chars
+                host.contains('.') && host.len() >= 3
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
     
     

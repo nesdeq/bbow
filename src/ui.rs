@@ -42,6 +42,12 @@ pub enum UIState {
         current_index: Option<usize>,
     },
     URLInput { input: String },
+    URLSuggestions {
+        original_url: String,
+        error_message: String,
+        suggestions: Vec<String>,
+        selected_index: usize,
+    },
     Error { message: String },
 }
 
@@ -69,6 +75,10 @@ pub enum UserAction {
     CancelInput,
     InputChar(char),
     Backspace,
+    SelectPrevSuggestion,
+    SelectNextSuggestion,
+    ConfirmSuggestion,
+    DismissError,
 }
 
 impl UI {
@@ -146,6 +156,15 @@ impl UI {
                 let input = input.clone();
                 self.terminal.draw(|f| {
                     Self::render_url_input_static(f, &input);
+                })?;
+            }
+            UIState::URLSuggestions { original_url, error_message, suggestions, selected_index } => {
+                let original_url = original_url.clone();
+                let error_message = error_message.clone();
+                let suggestions = suggestions.clone();
+                let selected_index = *selected_index;
+                self.terminal.draw(|f| {
+                    Self::render_url_suggestions_static(f, &original_url, &error_message, &suggestions, selected_index);
                 })?;
             }
             UIState::Error { message } => {
@@ -590,6 +609,65 @@ impl UI {
         f.render_widget(input_widget, popup_area);
     }
 
+    fn render_url_suggestions_static(f: &mut Frame, original_url: &str, error_message: &str, suggestions: &[String], selected_index: usize) {
+        let area = f.size();
+        
+        let popup_area = Rect {
+            x: area.width / 8,
+            y: area.height / 4,
+            width: area.width * 3 / 4,
+            height: area.height / 2,
+        };
+
+        f.render_widget(Clear, popup_area);
+
+        // Split into sections
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3), // Error message
+                Constraint::Length(3), // Original URL
+                Constraint::Min(5),    // Suggestions
+                Constraint::Length(3), // Help
+            ].as_ref())
+            .split(popup_area);
+
+        // Error message
+        let error_widget = Paragraph::new(format!("Failed to load: {}", error_message))
+            .style(Style::default().fg(Color::Red))
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title("❌ Error"));
+        f.render_widget(error_widget, chunks[0]);
+
+        // Original URL
+        let url_widget = Paragraph::new(format!("Original: {}", original_url))
+            .style(Style::default().fg(Color::Yellow))
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::ALL).title("🔗 URL"));
+        f.render_widget(url_widget, chunks[1]);
+
+        // Suggestions
+        let suggestion_items: Vec<ListItem> = suggestions.iter().enumerate().map(|(i, suggestion)| {
+            let style = if i == selected_index {
+                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            ListItem::new(suggestion.clone()).style(style)
+        }).collect();
+
+        let suggestions_list = List::new(suggestion_items)
+            .block(Block::default().borders(Borders::ALL).title("💡 Suggestions"))
+            .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan));
+        f.render_widget(suggestions_list, chunks[2]);
+
+        // Help
+        let help_widget = Paragraph::new("↑↓ Select • Enter Confirm • Esc Cancel • q Quit")
+            .style(Style::default().fg(Color::Gray))
+            .block(Block::default().borders(Borders::ALL).title("⌨️ Controls"));
+        f.render_widget(help_widget, chunks[3]);
+    }
+
     fn render_error_static(f: &mut Frame, message: &str) {
         let area = f.size();
         
@@ -602,7 +680,7 @@ impl UI {
 
         f.render_widget(Clear, popup_area);
 
-        let wrapped_message = fill(message, (popup_area.width as usize).saturating_sub(4));
+        let wrapped_message = format!("{}\n\nPress any key to dismiss", message);
         let error_widget = Paragraph::new(wrapped_message)
             .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
             .wrap(Wrap { trim: true })
@@ -630,8 +708,18 @@ impl UI {
                     UIState::History { .. } => {
                         return Ok(UserAction::GoBack); // Any key returns from history
                     }
+                    UIState::URLSuggestions { .. } => {
+                        match key.code {
+                            KeyCode::Esc => return Ok(UserAction::CancelInput),
+                            KeyCode::Char('q') => return Ok(UserAction::Quit),
+                            KeyCode::Up => return Ok(UserAction::SelectPrevSuggestion),
+                            KeyCode::Down => return Ok(UserAction::SelectNextSuggestion),
+                            KeyCode::Enter => return Ok(UserAction::ConfirmSuggestion),
+                            _ => continue,
+                        }
+                    }
                     UIState::Error { .. } => {
-                        return Ok(UserAction::Refresh); // Any key dismisses error
+                        return Ok(UserAction::DismissError); // Any key dismisses error
                     }
                     _ => {
                         match key.code {
