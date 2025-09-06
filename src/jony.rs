@@ -2,7 +2,7 @@
 // Embodying principles of simplicity, elegance, and focus on content
 
 use crate::links::Link;
-use crate::markdown::{render_structured_to_lines, parse_markdown_to_structured, MarkdownElement};
+use crate::markdown::{parse_markdown_to_structured, render_structured_to_lines, MarkdownElement};
 use crate::ui::{BrowserState, HistoryEntry, UIInterface, UserAction};
 use anyhow::Result;
 use crossterm::{
@@ -383,20 +383,29 @@ impl JonyUI {
         let parsed_lines = parse_markdown_to_structured(summary, width);
         let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
 
+        // If there are no lines, render empty content
+        if lines.is_empty() {
+            f.render_widget(Paragraph::new("").style(Style::default().fg(CONTENT)), area);
+            return;
+        }
+
         let visible_height = area.height as usize;
-        let start_index = (scroll_pos as usize).min(lines.len().saturating_sub(1));
+        let start_index = if lines.is_empty() {
+            0
+        } else {
+            (scroll_pos as usize).min(lines.len() - 1)
+        };
         let end_index = (start_index + visible_height).min(lines.len());
         let visible_lines = if start_index < lines.len() {
             lines[start_index..end_index].to_vec()
         } else {
-            vec![]
+            Vec::new()
         };
 
         // Clean content area without borders - Jony Ive minimalism
+        // Remove .wrap() as it can cause index out of bounds issues with certain content
         f.render_widget(
-            Paragraph::new(visible_lines)
-                .style(Style::default().fg(CONTENT))
-                .wrap(Wrap { trim: false }),
+            Paragraph::new(visible_lines).style(Style::default().fg(CONTENT)),
             area,
         );
 
@@ -427,33 +436,25 @@ impl JonyUI {
 
     fn style_markdown_element(element: &MarkdownElement) -> Style {
         match element {
-            MarkdownElement::Header1(_) => Style::default()
-                .fg(EMPHASIS)
-                .add_modifier(Modifier::BOLD),
-            MarkdownElement::Header2(_) => Style::default()
-                .fg(EMPHASIS) 
-                .add_modifier(Modifier::BOLD),
-            MarkdownElement::Header3(_) => Style::default()
-                .fg(EMPHASIS)
-                .add_modifier(Modifier::BOLD),
-            MarkdownElement::Header4(_) => Style::default()
-                .fg(ACCENT)
-                .add_modifier(Modifier::BOLD),
-            MarkdownElement::Bullet(_) => Style::default().fg(CONTENT),
-            MarkdownElement::Bold(_) => Style::default()
-                .fg(EMPHASIS)
-                .add_modifier(Modifier::BOLD),
-            MarkdownElement::Italic(_) => Style::default()
-                .fg(ACCENT)
-                .add_modifier(Modifier::ITALIC),
-            MarkdownElement::Code(_) => Style::default()
-                .fg(EMPHASIS)
-                .bg(DIVIDER),
+            MarkdownElement::Header1(_) => {
+                Style::default().fg(EMPHASIS).add_modifier(Modifier::BOLD)
+            }
+            MarkdownElement::Header2(_) => {
+                Style::default().fg(EMPHASIS).add_modifier(Modifier::BOLD)
+            }
+            MarkdownElement::Header3(_) => {
+                Style::default().fg(EMPHASIS).add_modifier(Modifier::BOLD)
+            }
+            MarkdownElement::Header4(_) => Style::default().fg(ACCENT).add_modifier(Modifier::BOLD),
+            MarkdownElement::Bold(_) => Style::default().fg(EMPHASIS).add_modifier(Modifier::BOLD),
+            MarkdownElement::Italic(_) => {
+                Style::default().fg(ACCENT).add_modifier(Modifier::ITALIC)
+            }
+            MarkdownElement::Code(_) => Style::default().fg(EMPHASIS).bg(DIVIDER),
             MarkdownElement::Normal(_) => Style::default().fg(CONTENT),
             MarkdownElement::Empty => Style::default(),
         }
     }
-
 
     fn render_links(
         f: &mut Frame,
@@ -765,7 +766,7 @@ impl JonyUI {
         let summary_height = height.saturating_sub(10);
         let width =
             (self.terminal.size().map(|s| s.width).unwrap_or(80) * 75 / 100).saturating_sub(4);
-        
+
         // Use the same markdown parsing as render_summary to get accurate line count
         let parsed_lines = parse_markdown_to_structured(summary, width as usize);
         let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);

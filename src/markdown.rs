@@ -10,10 +10,9 @@ use textwrap::fill;
 #[derive(Debug, Clone)]
 pub enum MarkdownElement {
     Header1(String),
-    Header2(String), 
+    Header2(String),
     Header3(String),
     Header4(String),
-    Bullet(String),
     Bold(String),
     Italic(String),
     Code(String),
@@ -25,6 +24,17 @@ pub enum MarkdownElement {
 pub struct ParsedLine {
     pub elements: Vec<MarkdownElement>,
     pub prefix: String,
+    pub line_type: LineType,
+}
+
+#[derive(Debug, Clone)]
+pub enum LineType {
+    Header1,
+    Header2,
+    Header3,
+    Header4,
+    Bullet,
+    Normal,
 }
 
 pub fn parse_markdown_to_structured(markdown: &str, width: usize) -> Vec<ParsedLine> {
@@ -37,40 +47,57 @@ pub fn parse_markdown_to_structured(markdown: &str, width: usize) -> Vec<ParsedL
             parsed_lines.push(ParsedLine {
                 elements: vec![MarkdownElement::Empty],
                 prefix: String::new(),
+                line_type: LineType::Normal,
             });
             continue;
         }
 
-        let (prefix, text, element_type) = parse_markdown_line_structure(line);
-        
+        let (prefix, text, line_type) = parse_markdown_line_structure(line);
+
         // Parse inline formatting within the text
         let inline_elements = parse_inline_elements(text);
-        
+
+        // Store the line type for later use in rendering
+        let styled_elements = inline_elements;
+
         // Handle text wrapping
-        let combined_text = inline_elements.iter()
+        let combined_text = styled_elements
+            .iter()
             .map(element_text)
             .collect::<Vec<_>>()
             .join("");
-        
-        if combined_text.len() > width {
+
+        if combined_text.len() > width && !prefix.is_empty() {
+            // For wrapped lines with prefixes (bullets), keep the prefix only on first line
+            let wrapped = fill(&combined_text, width - prefix.len());
+            let mut first = true;
+            for wrapped_line in wrapped.lines() {
+                parsed_lines.push(ParsedLine {
+                    elements: vec![MarkdownElement::Normal(wrapped_line.to_string())],
+                    prefix: if first {
+                        prefix.clone()
+                    } else {
+                        " ".repeat(prefix.len())
+                    },
+                    line_type: line_type.clone(),
+                });
+                first = false;
+            }
+        } else if combined_text.len() > width {
+            // For wrapped lines without prefixes
             let wrapped = fill(&combined_text, width);
             for wrapped_line in wrapped.lines() {
                 parsed_lines.push(ParsedLine {
                     elements: vec![MarkdownElement::Normal(wrapped_line.to_string())],
-                    prefix: prefix.clone(),
+                    prefix: String::new(),
+                    line_type: line_type.clone(),
                 });
             }
         } else {
             parsed_lines.push(ParsedLine {
-                elements: match element_type {
-                    MarkdownElement::Header1(_) => vec![MarkdownElement::Header1(text.to_string())],
-                    MarkdownElement::Header2(_) => vec![MarkdownElement::Header2(text.to_string())],
-                    MarkdownElement::Header3(_) => vec![MarkdownElement::Header3(text.to_string())],
-                    MarkdownElement::Header4(_) => vec![MarkdownElement::Header4(text.to_string())],
-                    MarkdownElement::Bullet(_) => vec![MarkdownElement::Bullet(text.to_string())],
-                    _ => inline_elements,
-                },
+                elements: styled_elements,
                 prefix: prefix.clone(),
+                line_type: line_type.clone(),
             });
         }
     }
@@ -78,19 +105,19 @@ pub fn parse_markdown_to_structured(markdown: &str, width: usize) -> Vec<ParsedL
     parsed_lines
 }
 
-fn parse_markdown_line_structure(line: &str) -> (String, &str, MarkdownElement) {
+fn parse_markdown_line_structure(line: &str) -> (String, &str, LineType) {
     if let Some(text) = line.strip_prefix("#### ") {
-        (String::new(), text, MarkdownElement::Header4(String::new()))
+        (String::new(), text, LineType::Header4)
     } else if let Some(text) = line.strip_prefix("### ") {
-        (String::new(), text, MarkdownElement::Header3(String::new()))
+        (String::new(), text, LineType::Header3)
     } else if let Some(text) = line.strip_prefix("## ") {
-        (String::new(), text, MarkdownElement::Header2(String::new()))
+        (String::new(), text, LineType::Header2)
     } else if let Some(text) = line.strip_prefix("# ") {
-        (String::new(), text, MarkdownElement::Header1(String::new()))
+        (String::new(), text, LineType::Header1)
     } else if let Some(text) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-        ("• ".to_string(), text, MarkdownElement::Bullet(String::new()))
+        ("• ".to_string(), text, LineType::Bullet)
     } else {
-        (String::new(), line, MarkdownElement::Normal(String::new()))
+        (String::new(), line, LineType::Normal)
     }
 }
 
@@ -169,7 +196,6 @@ fn element_text(element: &MarkdownElement) -> &str {
         MarkdownElement::Header2(text) => text,
         MarkdownElement::Header3(text) => text,
         MarkdownElement::Header4(text) => text,
-        MarkdownElement::Bullet(text) => text,
         MarkdownElement::Bold(text) => text,
         MarkdownElement::Italic(text) => text,
         MarkdownElement::Code(text) => text,
@@ -186,23 +212,82 @@ where
     let mut lines = Vec::new();
 
     for parsed_line in parsed_lines {
-        if parsed_line.elements.len() == 1 && matches!(parsed_line.elements[0], MarkdownElement::Empty) {
+        if parsed_line.elements.len() == 1
+            && matches!(parsed_line.elements[0], MarkdownElement::Empty)
+        {
             lines.push(Line::from(""));
             continue;
         }
 
         let mut spans = Vec::new();
-        
+
         // Add prefix if present
         if !parsed_line.prefix.is_empty() {
-            spans.push(Span::styled(parsed_line.prefix.clone(), styler(&MarkdownElement::Normal(String::new()))));
+            spans.push(Span::styled(
+                parsed_line.prefix.clone(),
+                styler(&MarkdownElement::Normal(String::new())),
+            ));
         }
 
-        // Add elements
-        for element in &parsed_line.elements {
-            let text = element_text(element).to_string();
-            let style = styler(element);
-            spans.push(Span::styled(text, style));
+        // For headers, combine all text and apply header styling
+        // For bullets and normal text, preserve inline formatting
+        match &parsed_line.line_type {
+            LineType::Header1 => {
+                let combined_text = parsed_line
+                    .elements
+                    .iter()
+                    .map(element_text)
+                    .collect::<Vec<_>>()
+                    .join("");
+                spans.push(Span::styled(
+                    combined_text,
+                    styler(&MarkdownElement::Header1(String::new())),
+                ));
+            }
+            LineType::Header2 => {
+                let combined_text = parsed_line
+                    .elements
+                    .iter()
+                    .map(element_text)
+                    .collect::<Vec<_>>()
+                    .join("");
+                spans.push(Span::styled(
+                    combined_text,
+                    styler(&MarkdownElement::Header2(String::new())),
+                ));
+            }
+            LineType::Header3 => {
+                let combined_text = parsed_line
+                    .elements
+                    .iter()
+                    .map(element_text)
+                    .collect::<Vec<_>>()
+                    .join("");
+                spans.push(Span::styled(
+                    combined_text,
+                    styler(&MarkdownElement::Header3(String::new())),
+                ));
+            }
+            LineType::Header4 => {
+                let combined_text = parsed_line
+                    .elements
+                    .iter()
+                    .map(element_text)
+                    .collect::<Vec<_>>()
+                    .join("");
+                spans.push(Span::styled(
+                    combined_text,
+                    styler(&MarkdownElement::Header4(String::new())),
+                ));
+            }
+            _ => {
+                // For bullets and normal text, preserve individual element formatting
+                for element in &parsed_line.elements {
+                    let text = element_text(element).to_string();
+                    let style = styler(element);
+                    spans.push(Span::styled(text, style));
+                }
+            }
         }
 
         lines.push(Line::from(spans));

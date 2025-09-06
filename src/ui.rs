@@ -1,5 +1,5 @@
 use crate::links::Link;
-use crate::markdown::{render_structured_to_lines, parse_markdown_to_structured, MarkdownElement};
+use crate::markdown::{parse_markdown_to_structured, render_structured_to_lines, MarkdownElement};
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -75,7 +75,6 @@ pub struct UI {
     links_scroll: usize,
     max_scroll: u16,
 }
-
 
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
@@ -382,9 +381,17 @@ impl UI {
         let visible_height = area.height.saturating_sub(2) as usize;
         let max_scroll = lines.len().saturating_sub(visible_height) as u16;
 
-        let start_index = scroll_pos as usize;
+        let start_index = if lines.is_empty() {
+            0
+        } else {
+            (scroll_pos as usize).min(lines.len() - 1)
+        };
         let end_index = (start_index + visible_height).min(lines.len());
-        let visible_lines = lines[start_index..end_index].to_vec();
+        let visible_lines = if start_index < lines.len() {
+            lines[start_index..end_index].to_vec()
+        } else {
+            Vec::new()
+        };
 
         f.render_widget(
             Paragraph::new(visible_lines)
@@ -424,21 +431,17 @@ impl UI {
             MarkdownElement::Header4(_) => Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-            MarkdownElement::Bullet(_) => Style::default(),
             MarkdownElement::Bold(_) => Style::default()
                 .add_modifier(Modifier::BOLD)
                 .fg(Color::White),
             MarkdownElement::Italic(_) => Style::default()
                 .add_modifier(Modifier::ITALIC)
                 .fg(Color::Cyan),
-            MarkdownElement::Code(_) => Style::default()
-                .bg(Color::DarkGray)
-                .fg(Color::White),
+            MarkdownElement::Code(_) => Style::default().bg(Color::DarkGray).fg(Color::White),
             MarkdownElement::Normal(_) => Style::default(),
             MarkdownElement::Empty => Style::default(),
         }
     }
-
 
     fn render_links(
         f: &mut Frame,
@@ -735,7 +738,6 @@ impl UI {
         );
     }
 
-
     fn get_user_input_internal(&mut self, state: &BrowserState) -> Result<UserAction> {
         loop {
             if let Event::Key(key) = event::read()? {
@@ -786,7 +788,6 @@ impl UI {
         }
     }
 
-
     fn update_links_scroll(&mut self) {
         self.update_links_scroll_with_height(10);
     }
@@ -808,7 +809,7 @@ impl UI {
         let summary_height = height.saturating_sub(8);
         let width =
             (self.terminal.size().map(|s| s.width).unwrap_or(80) * 60 / 100).saturating_sub(4);
-        
+
         // Use the same markdown parsing as render_summary to get accurate line count
         let parsed_lines = parse_markdown_to_structured(summary, width as usize);
         let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
@@ -816,5 +817,4 @@ impl UI {
         let visible_height = summary_height as usize;
         self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
     }
-
 }
