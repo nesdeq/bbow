@@ -2,6 +2,7 @@
 // Embodying principles of simplicity, elegance, and focus on content
 
 use crate::links::Link;
+use crate::markdown::{render_structured_to_lines, parse_markdown_to_structured, MarkdownElement};
 use crate::ui::{BrowserState, HistoryEntry, UIInterface, UserAction};
 use anyhow::Result;
 use crossterm::{
@@ -28,12 +29,13 @@ pub struct JonyUI {
     max_scroll: u16,
 }
 
-// Jony Ive color palette - sophisticated grays and minimal accent colors
-const CONTENT: Color = Color::Rgb(29, 29, 29); // Deep charcoal
-const SECONDARY: Color = Color::Rgb(99, 99, 102); // Cool gray
-const ACCENT: Color = Color::Rgb(0, 122, 255); // Apple blue
-const SUBTLE: Color = Color::Rgb(174, 174, 178); // Light gray
-const DIVIDER: Color = Color::Rgb(229, 229, 234); // Separator gray
+// Jony Ive color palette - optimized for dark terminals
+const CONTENT: Color = Color::Rgb(245, 245, 247); // Off-white for primary text
+const SECONDARY: Color = Color::Rgb(174, 174, 178); // Warm gray for secondary text
+const ACCENT: Color = Color::Rgb(0, 122, 255); // Apple blue (unchanged - perfect)
+const SUBTLE: Color = Color::Rgb(99, 99, 102); // Darker gray for subtle elements
+const DIVIDER: Color = Color::Rgb(72, 72, 74); // Dark gray for dividers
+const EMPHASIS: Color = Color::Rgb(255, 255, 255); // Pure white for emphasis
 
 impl UIInterface for JonyUI {
     fn new() -> Result<Self> {
@@ -271,7 +273,7 @@ impl JonyUI {
         // Minimal, elegant title - no borders
         f.render_widget(
             Paragraph::new("BBOW")
-                .style(Style::default().fg(CONTENT).add_modifier(Modifier::BOLD))
+                .style(Style::default().fg(EMPHASIS).add_modifier(Modifier::BOLD))
                 .alignment(Alignment::Center),
             sections[0],
         );
@@ -362,7 +364,7 @@ impl JonyUI {
         // Clean title without borders - focus on typography
         f.render_widget(
             Paragraph::new(title)
-                .style(Style::default().fg(CONTENT).add_modifier(Modifier::BOLD))
+                .style(Style::default().fg(EMPHASIS).add_modifier(Modifier::BOLD))
                 .wrap(Wrap { trim: true }),
             chunks[0],
         );
@@ -378,12 +380,17 @@ impl JonyUI {
 
     fn render_summary(f: &mut Frame, area: Rect, summary: &str, scroll_pos: u16) {
         let width = area.width.saturating_sub(2) as usize;
-        let lines = Self::parse_minimal_markdown(summary, width);
+        let parsed_lines = parse_markdown_to_structured(summary, width);
+        let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
 
         let visible_height = area.height as usize;
-        let start_index = scroll_pos as usize;
+        let start_index = (scroll_pos as usize).min(lines.len().saturating_sub(1));
         let end_index = (start_index + visible_height).min(lines.len());
-        let visible_lines = lines[start_index..end_index].to_vec();
+        let visible_lines = if start_index < lines.len() {
+            lines[start_index..end_index].to_vec()
+        } else {
+            vec![]
+        };
 
         // Clean content area without borders - Jony Ive minimalism
         f.render_widget(
@@ -402,7 +409,8 @@ impl JonyUI {
                 height: area.height,
             };
 
-            let scroll_pos_ratio = scroll_pos as f32 / (lines.len() - visible_height) as f32;
+            let max_scroll_for_indicator = (lines.len().saturating_sub(visible_height)).max(1);
+            let scroll_pos_ratio = scroll_pos as f32 / max_scroll_for_indicator as f32;
             let indicator_y = area.y + (scroll_pos_ratio * area.height as f32) as u16;
 
             f.render_widget(
@@ -417,63 +425,35 @@ impl JonyUI {
         }
     }
 
-    fn parse_minimal_markdown(text: &str, width: usize) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-
-        for line in text.lines() {
-            let line = line.trim();
-
-            if line.is_empty() {
-                lines.push(Line::from(""));
-                continue;
-            }
-
-            // Jony Ive-inspired minimal markdown parsing - focus on hierarchy
-            let formatted_line = if let Some(text) = line.strip_prefix("# ") {
-                Line::from(vec![Span::styled(
-                    text.to_string(),
-                    Style::default().fg(CONTENT).add_modifier(Modifier::BOLD),
-                )])
-            } else if let Some(text) = line.strip_prefix("## ") {
-                Line::from(vec![Span::styled(
-                    text.to_string(),
-                    Style::default().fg(CONTENT).add_modifier(Modifier::BOLD),
-                )])
-            } else if let Some(text) = line.strip_prefix("- ") {
-                Line::from(vec![
-                    Span::styled("  • ", Style::default().fg(ACCENT)),
-                    Span::styled(text.to_string(), Style::default().fg(CONTENT)),
-                ])
-            } else if line.starts_with("**") && line.ends_with("**") && line.len() > 4 {
-                Line::from(vec![Span::styled(
-                    line[2..line.len() - 2].to_string(),
-                    Style::default().fg(CONTENT).add_modifier(Modifier::BOLD),
-                )])
-            } else {
-                Line::from(vec![Span::styled(
-                    line.to_string(),
-                    Style::default().fg(CONTENT),
-                )])
-            };
-
-            // Handle text wrapping elegantly
-            let text_content = formatted_line
-                .spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<String>();
-            if text_content.len() > width {
-                let wrapped = fill(&text_content, width);
-                for wrapped_line in wrapped.lines() {
-                    lines.push(Line::from(wrapped_line.to_string()));
-                }
-            } else {
-                lines.push(formatted_line);
-            }
+    fn style_markdown_element(element: &MarkdownElement) -> Style {
+        match element {
+            MarkdownElement::Header1(_) => Style::default()
+                .fg(EMPHASIS)
+                .add_modifier(Modifier::BOLD),
+            MarkdownElement::Header2(_) => Style::default()
+                .fg(EMPHASIS) 
+                .add_modifier(Modifier::BOLD),
+            MarkdownElement::Header3(_) => Style::default()
+                .fg(EMPHASIS)
+                .add_modifier(Modifier::BOLD),
+            MarkdownElement::Header4(_) => Style::default()
+                .fg(ACCENT)
+                .add_modifier(Modifier::BOLD),
+            MarkdownElement::Bullet(_) => Style::default().fg(CONTENT),
+            MarkdownElement::Bold(_) => Style::default()
+                .fg(EMPHASIS)
+                .add_modifier(Modifier::BOLD),
+            MarkdownElement::Italic(_) => Style::default()
+                .fg(ACCENT)
+                .add_modifier(Modifier::ITALIC),
+            MarkdownElement::Code(_) => Style::default()
+                .fg(EMPHASIS)
+                .bg(DIVIDER),
+            MarkdownElement::Normal(_) => Style::default().fg(CONTENT),
+            MarkdownElement::Empty => Style::default(),
         }
-
-        lines
     }
+
 
     fn render_links(
         f: &mut Frame,
@@ -597,7 +577,7 @@ impl JonyUI {
         // Clean title
         f.render_widget(
             Paragraph::new("History")
-                .style(Style::default().fg(CONTENT).add_modifier(Modifier::BOLD))
+                .style(Style::default().fg(EMPHASIS).add_modifier(Modifier::BOLD))
                 .alignment(Alignment::Center),
             content_area[0],
         );
@@ -785,8 +765,11 @@ impl JonyUI {
         let summary_height = height.saturating_sub(10);
         let width =
             (self.terminal.size().map(|s| s.width).unwrap_or(80) * 75 / 100).saturating_sub(4);
-        let wrapped_text = fill(summary, width as usize);
-        let lines_count = wrapped_text.lines().count();
+        
+        // Use the same markdown parsing as render_summary to get accurate line count
+        let parsed_lines = parse_markdown_to_structured(summary, width as usize);
+        let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
+        let lines_count = lines.len();
         let visible_height = summary_height as usize;
         self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
     }

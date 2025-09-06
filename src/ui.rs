@@ -1,4 +1,5 @@
 use crate::links::Link;
+use crate::markdown::{render_structured_to_lines, parse_markdown_to_structured, MarkdownElement};
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -375,7 +376,8 @@ impl UI {
 
     fn render_summary(f: &mut Frame, area: Rect, summary: &str, scroll_pos: u16) {
         let width = area.width.saturating_sub(4) as usize;
-        let lines = Self::parse_markdown_to_lines(summary, width);
+        let parsed_lines = parse_markdown_to_structured(summary, width);
+        let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
 
         let visible_height = area.height.saturating_sub(2) as usize;
         let max_scroll = lines.len().saturating_sub(visible_height) as u16;
@@ -408,168 +410,35 @@ impl UI {
         }
     }
 
-    fn parse_markdown_to_lines(markdown: &str, width: usize) -> Vec<Line<'static>> {
-        let mut lines = Vec::new();
-
-        for line in markdown.lines() {
-            let line = line.trim();
-
-            if line.is_empty() {
-                lines.push(Line::from(""));
-                continue;
-            }
-
-            let (prefix, text, base_style) = Self::parse_markdown_line(line);
-            let formatted_lines =
-                Self::parse_inline_formatting(&format!("{}{}", prefix, text), width);
-
-            for mut formatted_line in formatted_lines {
-                for span in &mut formatted_line.spans {
-                    span.style = span.style.patch(base_style);
-                }
-                lines.push(formatted_line);
-            }
-        }
-
-        lines
-    }
-
-    fn parse_markdown_line(line: &str) -> (&str, &str, Style) {
-        if let Some(text) = line.strip_prefix("#### ") {
-            (
-                "",
-                text,
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else if let Some(text) = line.strip_prefix("### ") {
-            (
-                "",
-                text,
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else if let Some(text) = line.strip_prefix("## ") {
-            (
-                "",
-                text,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else if let Some(text) = line.strip_prefix("# ") {
-            (
-                "",
-                text,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )
-        } else if let Some(text) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-            ("• ", text, Style::default())
-        } else {
-            ("", line, Style::default())
+    fn style_markdown_element(element: &MarkdownElement) -> Style {
+        match element {
+            MarkdownElement::Header1(_) => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            MarkdownElement::Header2(_) => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            MarkdownElement::Header3(_) => Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+            MarkdownElement::Header4(_) => Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            MarkdownElement::Bullet(_) => Style::default(),
+            MarkdownElement::Bold(_) => Style::default()
+                .add_modifier(Modifier::BOLD)
+                .fg(Color::White),
+            MarkdownElement::Italic(_) => Style::default()
+                .add_modifier(Modifier::ITALIC)
+                .fg(Color::Cyan),
+            MarkdownElement::Code(_) => Style::default()
+                .bg(Color::DarkGray)
+                .fg(Color::White),
+            MarkdownElement::Normal(_) => Style::default(),
+            MarkdownElement::Empty => Style::default(),
         }
     }
 
-    fn parse_inline_formatting(text: &str, width: usize) -> Vec<Line<'static>> {
-        let mut spans = Vec::new();
-        let mut current_text = String::new();
-        let mut chars = text.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            match ch {
-                '*' if chars.peek() == Some(&'*') => {
-                    chars.next();
-                    if !current_text.is_empty() {
-                        spans.push(Span::raw(current_text.clone()));
-                        current_text.clear();
-                    }
-
-                    let mut bold_text = String::new();
-                    #[allow(clippy::while_let_on_iterator)]
-                    while let Some(ch) = chars.next() {
-                        if ch == '*' && chars.peek() == Some(&'*') {
-                            chars.next();
-                            break;
-                        }
-                        bold_text.push(ch);
-                    }
-                    spans.push(Span::styled(
-                        bold_text,
-                        Style::default()
-                            .add_modifier(Modifier::BOLD)
-                            .fg(Color::White),
-                    ));
-                }
-                '*' => {
-                    if !current_text.is_empty() {
-                        spans.push(Span::raw(current_text.clone()));
-                        current_text.clear();
-                    }
-
-                    let mut italic_text = String::new();
-                    for ch in chars.by_ref() {
-                        if ch == '*' {
-                            break;
-                        }
-                        italic_text.push(ch);
-                    }
-                    spans.push(Span::styled(
-                        italic_text,
-                        Style::default()
-                            .add_modifier(Modifier::ITALIC)
-                            .fg(Color::Cyan),
-                    ));
-                }
-                '`' => {
-                    if !current_text.is_empty() {
-                        spans.push(Span::raw(current_text.clone()));
-                        current_text.clear();
-                    }
-
-                    let mut code_text = String::new();
-                    for ch in chars.by_ref() {
-                        if ch == '`' {
-                            break;
-                        }
-                        code_text.push(ch);
-                    }
-                    spans.push(Span::styled(
-                        code_text,
-                        Style::default().bg(Color::DarkGray).fg(Color::White),
-                    ));
-                }
-                _ => current_text.push(ch),
-            }
-        }
-
-        if !current_text.is_empty() {
-            spans.push(Span::raw(current_text));
-        }
-
-        if spans.is_empty() {
-            spans.push(Span::raw(text.to_string()));
-        }
-
-        let combined_text = spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect::<Vec<_>>()
-            .join("");
-        let wrapped = fill(&combined_text, width);
-
-        if wrapped.lines().count() <= 1 {
-            vec![Line::from(spans)]
-        } else {
-            wrapped
-                .lines()
-                .map(|line| Line::from(line.to_string()))
-                .collect()
-        }
-    }
 
     fn render_links(
         f: &mut Frame,
@@ -939,8 +808,11 @@ impl UI {
         let summary_height = height.saturating_sub(8);
         let width =
             (self.terminal.size().map(|s| s.width).unwrap_or(80) * 60 / 100).saturating_sub(4);
-        let wrapped_text = fill(summary, width as usize);
-        let lines_count = wrapped_text.lines().count();
+        
+        // Use the same markdown parsing as render_summary to get accurate line count
+        let parsed_lines = parse_markdown_to_structured(summary, width as usize);
+        let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
+        let lines_count = lines.len();
         let visible_height = summary_height as usize;
         self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
     }

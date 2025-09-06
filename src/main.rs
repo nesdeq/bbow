@@ -4,6 +4,7 @@ mod extractor;
 mod history;
 mod jony;
 mod links;
+mod markdown;
 mod openai;
 mod ui;
 
