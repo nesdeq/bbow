@@ -7,6 +7,7 @@ use anyhow::Result;
 // Re-export UI implementations
 pub mod default;
 pub mod jony;
+pub mod robocop;
 
 // Shared UI types and traits
 #[derive(Debug, Clone)]
