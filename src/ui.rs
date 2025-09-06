@@ -805,16 +805,21 @@ impl UI {
     }
 
     fn update_max_scroll(&mut self, summary: &str) {
-        let height = self.terminal.size().map(|s| s.height).unwrap_or(24);
-        let summary_height = height.saturating_sub(8);
-        let width =
-            (self.terminal.size().map(|s| s.width).unwrap_or(80) * 60 / 100).saturating_sub(4);
-
+        // Calculate dimensions matching what render_summary actually uses
+        let terminal_size = self.terminal.size().unwrap_or(ratatui::layout::Rect::new(0, 0, 80, 24));
+        
+        // Match the layout calculation from render_page
+        let main_content_height = terminal_size.height.saturating_sub(5 + 3); // header + footer 
+        let content_width = terminal_size.width * 80 / 100; // 80% for content area
+        
+        // Match render_summary calculations exactly  
+        let width = content_width.saturating_sub(4) as usize; // same as area.width.saturating_sub(4)
+        let visible_height = main_content_height.saturating_sub(2) as usize; // same as area.height.saturating_sub(2)
+        
         // Use the same markdown parsing as render_summary to get accurate line count
-        let parsed_lines = parse_markdown_to_structured(summary, width as usize);
+        let parsed_lines = parse_markdown_to_structured(summary, width);
         let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
         let lines_count = lines.len();
-        let visible_height = summary_height as usize;
         self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
     }
 }

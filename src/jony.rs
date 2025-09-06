@@ -403,34 +403,33 @@ impl JonyUI {
         };
 
         // Clean content area without borders - Jony Ive minimalism
-        // Remove .wrap() as it can cause index out of bounds issues with certain content
+        // Ensure we don't crash on oversized content by adding bounds checking
         f.render_widget(
-            Paragraph::new(visible_lines).style(Style::default().fg(CONTENT)),
+            Paragraph::new(visible_lines)
+                .style(Style::default().fg(CONTENT))
+                .wrap(ratatui::widgets::Wrap { trim: true }),
             area,
         );
 
         // Subtle scroll indicator if needed
-        if lines.len() > visible_height {
-            let scroll_indicator_area = Rect {
-                x: area.x + area.width - 1,
-                y: area.y,
-                width: 1,
-                height: area.height,
-            };
-
+        if lines.len() > visible_height && area.width > 0 && area.height > 1 {
             let max_scroll_for_indicator = (lines.len().saturating_sub(visible_height)).max(1);
-            let scroll_pos_ratio = scroll_pos as f32 / max_scroll_for_indicator as f32;
-            let indicator_y = area.y + (scroll_pos_ratio * area.height as f32) as u16;
+            let scroll_pos_ratio = (scroll_pos as f32 / max_scroll_for_indicator as f32).min(1.0);
+            let indicator_y_offset = (scroll_pos_ratio * (area.height.saturating_sub(1)) as f32) as u16;
+            let indicator_y = area.y + indicator_y_offset;
 
-            f.render_widget(
-                Paragraph::new("▌").style(Style::default().fg(SUBTLE)),
-                Rect {
-                    x: scroll_indicator_area.x,
-                    y: indicator_y,
-                    width: 1,
-                    height: 1,
-                },
-            );
+            // Ensure the indicator position is within bounds
+            if indicator_y < area.y + area.height && area.x + area.width > 0 {
+                f.render_widget(
+                    Paragraph::new("▌").style(Style::default().fg(SUBTLE)),
+                    Rect {
+                        x: area.x + area.width - 1,
+                        y: indicator_y,
+                        width: 1,
+                        height: 1,
+                    },
+                );
+            }
         }
     }
 
@@ -762,16 +761,21 @@ impl JonyUI {
     }
 
     fn update_max_scroll(&mut self, summary: &str) {
-        let height = self.terminal.size().map(|s| s.height).unwrap_or(24);
-        let summary_height = height.saturating_sub(10);
-        let width =
-            (self.terminal.size().map(|s| s.width).unwrap_or(80) * 75 / 100).saturating_sub(4);
-
+        // Calculate dimensions matching what render_summary actually uses
+        let terminal_size = self.terminal.size().unwrap_or(ratatui::layout::Rect::new(0, 0, 80, 24));
+        
+        // Match the layout calculation from render_page
+        let content_height = terminal_size.height.saturating_sub(1 + 4 + 2); // margin + header + footer
+        let content_width = terminal_size.width.saturating_sub(2) * 75 / 100; // 75% for content area
+        
+        // Match render_summary calculations exactly
+        let width = content_width.saturating_sub(2) as usize; // same as area.width.saturating_sub(2)
+        let visible_height = content_height as usize; // same as area.height
+        
         // Use the same markdown parsing as render_summary to get accurate line count
-        let parsed_lines = parse_markdown_to_structured(summary, width as usize);
+        let parsed_lines = parse_markdown_to_structured(summary, width);
         let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
         let lines_count = lines.len();
-        let visible_height = summary_height as usize;
         self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
     }
 }
