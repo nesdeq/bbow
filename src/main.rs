@@ -12,7 +12,7 @@ use browser::Browser;
 use clap::Parser;
 
 // Import UI traits and implementations
-use ui::{default::UI as DefaultUI, jony::JonyUI, robocop::RobocopUI, UIInterface};
+use ui::{default::UI as DefaultUI, expi::ExpiUI, jony::JonyUI, robocop::RobocopUI, UIInterface};
 
 #[derive(Parser)]
 #[command(name = "bbow", about = "A CLI browser with AI-powered summaries")]
@@ -26,6 +26,7 @@ struct Args {
 
 const AVAILABLE_UIS: &[(&str, &str)] = &[
     ("default", "Original terminal UI with borders and colors"),
+    ("expi", "Traditional static browser interface with statistics"),
     ("jony", "Minimalist Jony Ive-inspired UI"),
     ("robocop", "1987 cyberpunk corporate terminal interface"),
 ];
@@ -33,6 +34,7 @@ const AVAILABLE_UIS: &[(&str, &str)] = &[
 fn create_ui(ui_name: &str) -> Result<Box<dyn UIInterface>> {
     match ui_name {
         "default" => Ok(Box::new(DefaultUI::new()?)),
+        "expi" => Ok(Box::new(ExpiUI::new()?)),
         "jony" => Ok(Box::new(JonyUI::new()?)),
         "robocop" => Ok(Box::new(RobocopUI::new()?)),
         _ => {

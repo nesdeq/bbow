@@ -6,6 +6,7 @@ use anyhow::Result;
 
 // Re-export UI implementations
 pub mod default;
+pub mod expi;
 pub mod jony;
 pub mod robocop;
 
