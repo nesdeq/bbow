@@ -1,6 +1,7 @@
+use crate::links::Link;
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -9,12 +10,14 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
+    widgets::{
+        Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
+    },
     Frame, Terminal,
 };
 use std::io::{self, Stdout};
 use textwrap::fill;
-use crate::links::Link;
 
 pub struct UI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -26,9 +29,9 @@ pub struct UI {
 
 #[derive(Debug, Clone)]
 pub enum UIState {
-    Loading { 
+    Loading {
         url: String,
-        progress: u16,  // 0-100
+        progress: u16,
         stage: String,
     },
     Page {
@@ -41,14 +44,18 @@ pub enum UIState {
         entries: Vec<HistoryEntry>,
         current_index: Option<usize>,
     },
-    URLInput { input: String },
+    URLInput {
+        input: String,
+    },
     URLSuggestions {
         original_url: String,
         error_message: String,
         suggestions: Vec<String>,
         selected_index: usize,
     },
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -111,190 +118,217 @@ impl UI {
 
     pub fn render(&mut self, state: &UIState) -> Result<()> {
         match state {
-            UIState::Loading { url, progress, stage } => {
-                let url = url.clone();
-                let progress = *progress;
-                let stage = stage.clone();
-                self.terminal.draw(|f| {
-                    Self::render_loading_static(f, &url, progress, &stage);
-                })?;
+            UIState::Loading {
+                url,
+                progress,
+                stage,
+            } => {
+                let (url, progress, stage) = (url.clone(), *progress, stage.clone());
+                self.terminal
+                    .draw(|f| Self::render_loading(f, &url, progress, &stage))?;
             }
-            UIState::Page { url, title, summary, links } => {
-                let url = url.clone();
-                let title = title.clone();
-                let summary = summary.clone();
-                let links = links.clone();
-                let scroll_pos = self.scroll_position;
-                let selected_link = self.selected_link;
-                let links_scroll = self.links_scroll;
-                
+            UIState::Page {
+                url,
+                title,
+                summary,
+                links,
+            } => {
+                let (url, title, summary, links) =
+                    (url.clone(), title.clone(), summary.clone(), links.clone());
+                let (scroll_pos, selected_link, links_scroll) =
+                    (self.scroll_position, self.selected_link, self.links_scroll);
+
                 self.terminal.draw(|f| {
-                    Self::render_page_static(f, &url, &title, &summary, &links, scroll_pos, selected_link, links_scroll);
+                    Self::render_page(
+                        f,
+                        &url,
+                        &title,
+                        &summary,
+                        &links,
+                        scroll_pos,
+                        selected_link,
+                        links_scroll,
+                    );
                 })?;
-                
-                // Update max_scroll after rendering
-                let summary_height = self.terminal.size()?.height.saturating_sub(8);
-                let width = (self.terminal.size()?.width * 60 / 100).saturating_sub(4);
-                let wrapped_text = fill(&summary, width as usize);
-                let lines_count = wrapped_text.lines().count();
-                let visible_height = summary_height as usize;
-                self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
-                
-                // Update links scroll based on actual dimensions
-                let links_height = self.terminal.size()?.height.saturating_sub(8);
-                let links_visible_height = links_height as usize;
-                self.update_links_scroll_with_height(links_visible_height);
+
+                self.update_max_scroll(&summary);
+                self.update_links_scroll_with_height(
+                    self.terminal.size()?.height.saturating_sub(8) as usize,
+                );
             }
-            UIState::History { entries, current_index } => {
-                let entries = entries.clone();
-                let current_index = *current_index;
-                self.terminal.draw(|f| {
-                    Self::render_history_static(f, &entries, current_index);
-                })?;
+            UIState::History {
+                entries,
+                current_index,
+            } => {
+                let (entries, current_index) = (entries.clone(), *current_index);
+                self.terminal
+                    .draw(|f| Self::render_history(f, &entries, current_index))?;
             }
             UIState::URLInput { input } => {
                 let input = input.clone();
-                self.terminal.draw(|f| {
-                    Self::render_url_input_static(f, &input);
-                })?;
+                self.terminal.draw(|f| Self::render_url_input(f, &input))?;
             }
-            UIState::URLSuggestions { original_url, error_message, suggestions, selected_index } => {
-                let original_url = original_url.clone();
-                let error_message = error_message.clone();
-                let suggestions = suggestions.clone();
-                let selected_index = *selected_index;
+            UIState::URLSuggestions {
+                original_url,
+                error_message,
+                suggestions,
+                selected_index,
+            } => {
+                let (original_url, error_message, suggestions, selected_index) = (
+                    original_url.clone(),
+                    error_message.clone(),
+                    suggestions.clone(),
+                    *selected_index,
+                );
                 self.terminal.draw(|f| {
-                    Self::render_url_suggestions_static(f, &original_url, &error_message, &suggestions, selected_index);
+                    Self::render_url_suggestions(
+                        f,
+                        &original_url,
+                        &error_message,
+                        &suggestions,
+                        selected_index,
+                    );
                 })?;
             }
             UIState::Error { message } => {
                 let message = message.clone();
-                self.terminal.draw(|f| {
-                    Self::render_error_static(f, &message);
-                })?;
+                self.terminal.draw(|f| Self::render_error(f, &message))?;
             }
         }
         Ok(())
     }
 
-    fn render_loading_static(f: &mut Frame, url: &str, progress: u16, stage: &str) {
-        let area = f.size();
+    fn render_loading(f: &mut Frame, url: &str, progress: u16, stage: &str) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(2)
             .constraints([
-                Constraint::Length(3),   // Title
-                Constraint::Length(4),   // URL
-                Constraint::Length(3),   // Progress bar
-                Constraint::Length(3),   // Status
-            ].as_ref())
-            .split(area);
+                Constraint::Length(3),
+                Constraint::Length(4),
+                Constraint::Length(3),
+                Constraint::Length(3),
+            ])
+            .split(f.size());
 
-        let title = Paragraph::new("🌐 Loading...")
-            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-            .block(Block::default().borders(Borders::ALL).title("BBOW Browser"));
-        f.render_widget(title, chunks[0]);
+        f.render_widget(
+            Paragraph::new("🌐 Loading...")
+                .style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .block(Block::default().borders(Borders::ALL).title("BBOW Browser")),
+            chunks[0],
+        );
 
-        let url_text = fill(url, (chunks[1].width as usize).saturating_sub(4));
-        let url_widget = Paragraph::new(url_text)
-            .style(Style::default().fg(Color::Blue))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title("URL"));
-        f.render_widget(url_widget, chunks[1]);
+        f.render_widget(
+            Paragraph::new(fill(url, chunks[1].width.saturating_sub(4) as usize))
+                .style(Style::default().fg(Color::Blue))
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::ALL).title("URL")),
+            chunks[1],
+        );
 
-        // Progress bar
-        let progress_label = format!("{}%", progress);
-        let gauge = Gauge::default()
-            .block(Block::default().borders(Borders::ALL).title("Progress"))
-            .gauge_style(Style::default().fg(Color::Cyan).bg(Color::Black))
-            .percent(progress)
-            .label(progress_label)
-            .use_unicode(true);
-        f.render_widget(gauge, chunks[2]);
+        f.render_widget(
+            Gauge::default()
+                .block(Block::default().borders(Borders::ALL).title("Progress"))
+                .gauge_style(Style::default().fg(Color::Cyan).bg(Color::Black))
+                .percent(progress)
+                .label(format!("{}%", progress))
+                .use_unicode(true),
+            chunks[2],
+        );
 
-        let status = Paragraph::new(stage.to_string())
-            .style(Style::default().fg(Color::Yellow))
-            .block(Block::default().borders(Borders::ALL).title("Status"));
-        f.render_widget(status, chunks[3]);
+        f.render_widget(
+            Paragraph::new(stage.to_string())
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().borders(Borders::ALL).title("Status")),
+            chunks[3],
+        );
     }
 
-    fn render_page_static(f: &mut Frame, url: &str, title: &str, summary: &str, links: &[Link], scroll_pos: u16, selected_link: usize, links_scroll: usize) {
-        let area = f.size();
-        
-        // Main layout
+    #[allow(clippy::too_many_arguments)]
+    fn render_page(
+        f: &mut Frame,
+        url: &str,
+        title: &str,
+        summary: &str,
+        links: &[Link],
+        scroll_pos: u16,
+        selected_link: usize,
+        links_scroll: usize,
+    ) {
         let main_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(5),  // Header
-                Constraint::Min(10),    // Content
-                Constraint::Length(3),  // Help
-            ].as_ref())
-            .split(area);
+                Constraint::Length(5),
+                Constraint::Min(10),
+                Constraint::Length(3),
+            ])
+            .split(f.size());
 
-        // Render header
-        Self::render_header_static(f, main_chunks[0], url, title);
+        Self::render_header(f, main_chunks[0], url, title);
 
-        // Content layout
         let content_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(80),  // Summary
-                Constraint::Percentage(20),  // Links
-            ].as_ref())
+            .constraints([Constraint::Percentage(80), Constraint::Percentage(20)])
             .split(main_chunks[1]);
 
-        // Render summary
-        Self::render_summary_static(f, content_chunks[0], summary, scroll_pos);
-
-        // Render links
-        Self::render_links_static(f, content_chunks[1], links, selected_link, links_scroll);
-
-        // Render help
-        Self::render_help_static(f, main_chunks[2]);
+        Self::render_summary(f, content_chunks[0], summary, scroll_pos);
+        Self::render_links(f, content_chunks[1], links, selected_link, links_scroll);
+        Self::render_help(f, main_chunks[2]);
     }
 
-    fn render_header_static(f: &mut Frame, area: Rect, url: &str, title: &str) {
+    fn render_header(f: &mut Frame, area: Rect, url: &str, title: &str) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(2), Constraint::Length(2)].as_ref())
+            .constraints([Constraint::Length(2), Constraint::Length(2)])
             .split(area);
 
-        let title_text = format!("🌐 {}", title);
-        let title_widget = Paragraph::new(title_text)
-            .style(Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT));
-        f.render_widget(title_widget, chunks[0]);
+        f.render_widget(
+            Paragraph::new(format!("🌐 {}", title))
+                .style(
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)),
+            chunks[0],
+        );
 
-        let url_text = format!("📍 {}", url);
-        let url_widget = Paragraph::new(url_text)
-            .style(Style::default().fg(Color::Blue))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT));
-        f.render_widget(url_widget, chunks[1]);
+        f.render_widget(
+            Paragraph::new(format!("📍 {}", url))
+                .style(Style::default().fg(Color::Blue))
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::BOTTOM | Borders::LEFT | Borders::RIGHT)),
+            chunks[1],
+        );
     }
 
-    fn render_summary_static(f: &mut Frame, area: Rect, summary: &str, scroll_pos: u16) {
-        let width = (area.width as usize).saturating_sub(4);
-        
-        // Parse markdown and create styled lines
+    fn render_summary(f: &mut Frame, area: Rect, summary: &str, scroll_pos: u16) {
+        let width = area.width.saturating_sub(4) as usize;
         let lines = Self::parse_markdown_to_lines(summary, width);
 
-        // Calculate scrolling
-        let visible_height = (area.height as usize).saturating_sub(2);
+        let visible_height = area.height.saturating_sub(2) as usize;
         let max_scroll = lines.len().saturating_sub(visible_height) as u16;
-        
+
         let start_index = scroll_pos as usize;
         let end_index = (start_index + visible_height).min(lines.len());
         let visible_lines = lines[start_index..end_index].to_vec();
 
-        let paragraph = Paragraph::new(visible_lines)
-            .wrap(Wrap { trim: false })
-            .block(Block::default().borders(Borders::ALL).title("📄 Summary (Markdown)"))
-            .scroll((0, 0));
-        f.render_widget(paragraph, area);
+        f.render_widget(
+            Paragraph::new(visible_lines)
+                .wrap(Wrap { trim: false })
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("📄 Summary (Markdown)"),
+                )
+                .scroll((0, 0)),
+            area,
+        );
 
-        // Render scrollbar if needed
         if max_scroll > 0 {
             let scrollbar = Scrollbar::default()
                 .orientation(ScrollbarOrientation::VerticalRight)
@@ -306,212 +340,218 @@ impl UI {
             f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
         }
     }
-    
+
     fn parse_markdown_to_lines(markdown: &str, width: usize) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-        
+
         for line in markdown.lines() {
             let line = line.trim();
-            
-            // Empty lines
+
             if line.is_empty() {
                 lines.push(Line::from(""));
                 continue;
             }
-            
-            // Headers with inline formatting support
-            if let Some(header_text) = line.strip_prefix("#### ") {
-                let formatted_lines = Self::parse_inline_formatting(header_text, width);
-                for mut formatted_line in formatted_lines {
-                    for span in &mut formatted_line.spans {
-                        span.style = span.style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
-                    }
-                    lines.push(formatted_line);
+
+            let (prefix, text, base_style) = Self::parse_markdown_line(line);
+            let formatted_lines =
+                Self::parse_inline_formatting(&format!("{}{}", prefix, text), width);
+
+            for mut formatted_line in formatted_lines {
+                for span in &mut formatted_line.spans {
+                    span.style = span.style.patch(base_style);
                 }
-                continue;
+                lines.push(formatted_line);
             }
-            
-            if let Some(header_text) = line.strip_prefix("### ") {
-                let formatted_lines = Self::parse_inline_formatting(header_text, width);
-                for mut formatted_line in formatted_lines {
-                    for span in &mut formatted_line.spans {
-                        span.style = span.style.fg(Color::Green).add_modifier(Modifier::BOLD);
-                    }
-                    lines.push(formatted_line);
-                }
-                continue;
-            }
-            
-            if let Some(header_text) = line.strip_prefix("## ") {
-                let formatted_lines = Self::parse_inline_formatting(header_text, width);
-                for mut formatted_line in formatted_lines {
-                    for span in &mut formatted_line.spans {
-                        span.style = span.style.fg(Color::Yellow).add_modifier(Modifier::BOLD);
-                    }
-                    lines.push(formatted_line);
-                }
-                continue;
-            }
-            
-            if let Some(header_text) = line.strip_prefix("# ") {
-                let formatted_lines = Self::parse_inline_formatting(header_text, width);
-                for mut formatted_line in formatted_lines {
-                    for span in &mut formatted_line.spans {
-                        span.style = span.style.fg(Color::Yellow).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
-                    }
-                    lines.push(formatted_line);
-                }
-                continue;
-            }
-            
-            // Bullet points with inline formatting
-            if let Some(bullet_text) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
-                let formatted_lines = Self::parse_inline_formatting(bullet_text, width);
-                for (i, formatted_line) in formatted_lines.into_iter().enumerate() {
-                    if i == 0 {
-                        // Add bullet symbol at the beginning of first line
-                        let mut bullet_spans = vec![Span::raw("• ")];
-                        bullet_spans.extend(formatted_line.spans);
-                        lines.push(Line::from(bullet_spans));
-                    } else {
-                        // Indent continuation lines
-                        let mut indented_spans = vec![Span::raw("  ")];
-                        indented_spans.extend(formatted_line.spans);
-                        lines.push(Line::from(indented_spans));
-                    }
-                }
-                continue;
-            }
-            
-            // Parse inline formatting (bold, italic, code)
-            let parsed_line = Self::parse_inline_formatting(line, width);
-            lines.extend(parsed_line);
         }
-        
+
         lines
     }
-    
+
+    fn parse_markdown_line(line: &str) -> (&str, &str, Style) {
+        if let Some(text) = line.strip_prefix("#### ") {
+            (
+                "",
+                text,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else if let Some(text) = line.strip_prefix("### ") {
+            (
+                "",
+                text,
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else if let Some(text) = line.strip_prefix("## ") {
+            (
+                "",
+                text,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else if let Some(text) = line.strip_prefix("# ") {
+            (
+                "",
+                text,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )
+        } else if let Some(text) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            ("• ", text, Style::default())
+        } else {
+            ("", line, Style::default())
+        }
+    }
+
     fn parse_inline_formatting(text: &str, width: usize) -> Vec<Line<'static>> {
         let mut spans = Vec::new();
         let mut current_text = String::new();
         let mut chars = text.chars().peekable();
-        
+
         while let Some(ch) = chars.next() {
             match ch {
-                '*' => {
-                    if chars.peek() == Some(&'*') {
-                        // Bold text **text**
-                        chars.next(); // consume second *
-                        if !current_text.is_empty() {
-                            spans.push(Span::raw(current_text.clone()));
-                            current_text.clear();
-                        }
-                        
-                        let mut bold_text = String::new();
-                        while let Some(ch) = chars.next() {
-                            if ch == '*' && chars.peek() == Some(&'*') {
-                                chars.next(); // consume second *
-                                break;
-                            }
-                            bold_text.push(ch);
-                        }
-                        spans.push(Span::styled(bold_text.to_string(), Style::default().add_modifier(Modifier::BOLD).fg(Color::White)));
-                    } else {
-                        // Italic text *text*
-                        if !current_text.is_empty() {
-                            spans.push(Span::raw(current_text.clone()));
-                            current_text.clear();
-                        }
-                        
-                        let mut italic_text = String::new();
-                        while let Some(ch) = chars.next() {
-                            if ch == '*' {
-                                break;
-                            }
-                            italic_text.push(ch);
-                        }
-                        spans.push(Span::styled(italic_text.to_string(), Style::default().add_modifier(Modifier::ITALIC).fg(Color::Cyan)));
-                    }
-                }
-                '`' => {
-                    // Inline code `code`
+                '*' if chars.peek() == Some(&'*') => {
+                    chars.next();
                     if !current_text.is_empty() {
                         spans.push(Span::raw(current_text.clone()));
                         current_text.clear();
                     }
-                    
-                    let mut code_text = String::new();
+
+                    let mut bold_text = String::new();
+                    #[allow(clippy::while_let_on_iterator)]
                     while let Some(ch) = chars.next() {
+                        if ch == '*' && chars.peek() == Some(&'*') {
+                            chars.next();
+                            break;
+                        }
+                        bold_text.push(ch);
+                    }
+                    spans.push(Span::styled(
+                        bold_text,
+                        Style::default()
+                            .add_modifier(Modifier::BOLD)
+                            .fg(Color::White),
+                    ));
+                }
+                '*' => {
+                    if !current_text.is_empty() {
+                        spans.push(Span::raw(current_text.clone()));
+                        current_text.clear();
+                    }
+
+                    let mut italic_text = String::new();
+                    for ch in chars.by_ref() {
+                        if ch == '*' {
+                            break;
+                        }
+                        italic_text.push(ch);
+                    }
+                    spans.push(Span::styled(
+                        italic_text,
+                        Style::default()
+                            .add_modifier(Modifier::ITALIC)
+                            .fg(Color::Cyan),
+                    ));
+                }
+                '`' => {
+                    if !current_text.is_empty() {
+                        spans.push(Span::raw(current_text.clone()));
+                        current_text.clear();
+                    }
+
+                    let mut code_text = String::new();
+                    for ch in chars.by_ref() {
                         if ch == '`' {
                             break;
                         }
                         code_text.push(ch);
                     }
-                    spans.push(Span::styled(code_text.to_string(), Style::default().bg(Color::DarkGray).fg(Color::White)));
+                    spans.push(Span::styled(
+                        code_text,
+                        Style::default().bg(Color::DarkGray).fg(Color::White),
+                    ));
                 }
-                _ => {
-                    current_text.push(ch);
-                }
+                _ => current_text.push(ch),
             }
         }
-        
+
         if !current_text.is_empty() {
             spans.push(Span::raw(current_text));
         }
-        
-        // Handle empty spans (no formatting found)
+
         if spans.is_empty() {
             spans.push(Span::raw(text.to_string()));
         }
-        
-        // Wrap text to fit width
-        let combined_text = spans.iter().map(|s| s.content.as_ref()).collect::<Vec<_>>().join("");
+
+        let combined_text = spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("");
         let wrapped = fill(&combined_text, width);
-        
-        // For now, apply formatting to the first wrapped line only
-        // TODO: Proper text wrapping with formatting preserved
+
         if wrapped.lines().count() <= 1 {
             vec![Line::from(spans)]
         } else {
-            wrapped.lines().map(|line| Line::from(line.to_string())).collect()
+            wrapped
+                .lines()
+                .map(|line| Line::from(line.to_string()))
+                .collect()
         }
     }
 
-    fn render_links_static(f: &mut Frame, area: Rect, links: &[Link], selected_link: usize, links_scroll: usize) {
+    fn render_links(
+        f: &mut Frame,
+        area: Rect,
+        links: &[Link],
+        selected_link: usize,
+        links_scroll: usize,
+    ) {
         if links.is_empty() {
-            let no_links = Paragraph::new("No links found")
-                .style(Style::default().fg(Color::Gray))
-                .block(Block::default().borders(Borders::ALL).title("🔗 Links"));
-            f.render_widget(no_links, area);
+            f.render_widget(
+                Paragraph::new("No links found")
+                    .style(Style::default().fg(Color::Gray))
+                    .block(Block::default().borders(Borders::ALL).title("🔗 Links")),
+                area,
+            );
             return;
         }
 
-        let visible_height = (area.height as usize).saturating_sub(2); // Account for borders
+        let visible_height = area.height.saturating_sub(2) as usize;
         let start_index = links_scroll;
         let end_index = (start_index + visible_height).min(links.len());
-        
-        let visible_links = &links[start_index..end_index];
-        let items: Vec<ListItem> = visible_links.iter().enumerate().map(|(i, link)| {
-            let absolute_index = start_index + i;
-            let style = if absolute_index == selected_link {
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
 
-            let content = format!("[{}] {}", link.index, link.text);
-            let wrapped_content = fill(&content, (area.width as usize).saturating_sub(6));
-            
-            ListItem::new(wrapped_content).style(style)
-        }).collect();
+        let items: Vec<ListItem> = links[start_index..end_index]
+            .iter()
+            .enumerate()
+            .map(|(i, link)| {
+                let absolute_index = start_index + i;
+                let style = if absolute_index == selected_link {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
 
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("🔗 Links"))
-            .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan));
+                let content = format!("[{}] {}", link.index, link.text);
+                let wrapped_content = fill(&content, area.width.saturating_sub(6) as usize);
+                ListItem::new(wrapped_content).style(style)
+            })
+            .collect();
 
-        f.render_widget(list, area);
-        
-        // Add scrollbar if there are more links than can fit
+        f.render_widget(
+            List::new(items)
+                .block(Block::default().borders(Borders::ALL).title("🔗 Links"))
+                .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan)),
+            area,
+        );
+
         if links.len() > visible_height {
             let scrollbar = Scrollbar::default()
                 .orientation(ScrollbarOrientation::VerticalRight)
@@ -524,76 +564,128 @@ impl UI {
         }
     }
 
-    fn render_help_static(f: &mut Frame, area: Rect) {
+    fn render_help(f: &mut Frame, area: Rect) {
         let help_text = vec![
             Line::from(vec![
-                Span::styled("↑↓", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "↑↓",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Scroll  "),
-                Span::styled("Shift+↑↓", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Shift+↑↓",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Select Link  "),
-                Span::styled("Enter", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "Enter",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Follow  "),
-                Span::styled("b", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "b",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Back  "),
             ]),
             Line::from(vec![
-                Span::styled("g", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "g",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" URL  "),
-                Span::styled("h", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "h",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" History  "),
-                Span::styled("r", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "r",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Refresh  "),
-                Span::styled("q", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "q",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" Quit"),
             ]),
         ];
 
-        let help = Paragraph::new(help_text)
-            .block(Block::default().borders(Borders::ALL).title("⌨️ Controls"));
-        f.render_widget(help, area);
+        f.render_widget(
+            Paragraph::new(help_text)
+                .block(Block::default().borders(Borders::ALL).title("⌨️ Controls")),
+            area,
+        );
     }
 
-    fn render_history_static(f: &mut Frame, entries: &[HistoryEntry], current_index: Option<usize>) {
+    fn render_history(f: &mut Frame, entries: &[HistoryEntry], current_index: Option<usize>) {
         let area = f.size();
-        
-        let items: Vec<ListItem> = entries.iter().enumerate().map(|(i, entry)| {
-            let marker = if Some(i) == current_index { "➤ " } else { "  " };
-            let style = if Some(i) == current_index {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
 
-            let content = format!("{}{} - {}", marker, entry.title, entry.url);
-            let wrapped_content = fill(&content, (area.width as usize).saturating_sub(4));
-            ListItem::new(wrapped_content).style(style)
-        }).collect();
+        let items: Vec<ListItem> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let marker = if Some(i) == current_index {
+                    "➤ "
+                } else {
+                    "  "
+                };
+                let style = if Some(i) == current_index {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
 
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("📚 History"))
-            .style(Style::default().fg(Color::White));
+                let content = format!("{}{} - {}", marker, entry.title, entry.url);
+                let wrapped_content = fill(&content, area.width.saturating_sub(4) as usize);
+                ListItem::new(wrapped_content).style(style)
+            })
+            .collect();
 
-        f.render_widget(list, area);
+        f.render_widget(
+            List::new(items)
+                .block(Block::default().borders(Borders::ALL).title("📚 History"))
+                .style(Style::default().fg(Color::White)),
+            area,
+        );
 
-        // Help text at bottom
         let help_area = Rect {
             x: area.x,
             y: area.y + area.height - 3,
             width: area.width,
             height: 3,
         };
-        
-        let help = Paragraph::new("Press any key to return...")
-            .style(Style::default().fg(Color::Gray))
-            .block(Block::default().borders(Borders::ALL));
+
         f.render_widget(Clear, help_area);
-        f.render_widget(help, help_area);
+        f.render_widget(
+            Paragraph::new("Press any key to return...")
+                .style(Style::default().fg(Color::Gray))
+                .block(Block::default().borders(Borders::ALL)),
+            help_area,
+        );
     }
 
-    fn render_url_input_static(f: &mut Frame, input: &str) {
+    fn render_url_input(f: &mut Frame, input: &str) {
         let area = f.size();
-        
-        // Center the input dialog
         let popup_area = Rect {
             x: area.width / 4,
             y: area.height / 2 - 2,
@@ -602,16 +694,22 @@ impl UI {
         };
 
         f.render_widget(Clear, popup_area);
-        
-        let input_widget = Paragraph::new(format!("🌐 {}", input))
-            .style(Style::default().fg(Color::White))
-            .block(Block::default().borders(Borders::ALL).title("Enter URL"));
-        f.render_widget(input_widget, popup_area);
+        f.render_widget(
+            Paragraph::new(format!("🌐 {}", input))
+                .style(Style::default().fg(Color::White))
+                .block(Block::default().borders(Borders::ALL).title("Enter URL")),
+            popup_area,
+        );
     }
 
-    fn render_url_suggestions_static(f: &mut Frame, original_url: &str, error_message: &str, suggestions: &[String], selected_index: usize) {
+    fn render_url_suggestions(
+        f: &mut Frame,
+        original_url: &str,
+        error_message: &str,
+        suggestions: &[String],
+        selected_index: usize,
+    ) {
         let area = f.size();
-        
         let popup_area = Rect {
             x: area.width / 8,
             y: area.height / 4,
@@ -621,56 +719,69 @@ impl UI {
 
         f.render_widget(Clear, popup_area);
 
-        // Split into sections
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Error message
-                Constraint::Length(3), // Original URL
-                Constraint::Min(5),    // Suggestions
-                Constraint::Length(3), // Help
-            ].as_ref())
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Length(3),
+            ])
             .split(popup_area);
 
-        // Error message
-        let error_widget = Paragraph::new(format!("Failed to load: {}", error_message))
-            .style(Style::default().fg(Color::Red))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title("❌ Error"));
-        f.render_widget(error_widget, chunks[0]);
+        f.render_widget(
+            Paragraph::new(format!("Failed to load: {}", error_message))
+                .style(Style::default().fg(Color::Red))
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::ALL).title("❌ Error")),
+            chunks[0],
+        );
 
-        // Original URL
-        let url_widget = Paragraph::new(format!("Original: {}", original_url))
-            .style(Style::default().fg(Color::Yellow))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title("🔗 URL"));
-        f.render_widget(url_widget, chunks[1]);
+        f.render_widget(
+            Paragraph::new(format!("Original: {}", original_url))
+                .style(Style::default().fg(Color::Yellow))
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::ALL).title("🔗 URL")),
+            chunks[1],
+        );
 
-        // Suggestions
-        let suggestion_items: Vec<ListItem> = suggestions.iter().enumerate().map(|(i, suggestion)| {
-            let style = if i == selected_index {
-                Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            ListItem::new(suggestion.clone()).style(style)
-        }).collect();
+        let suggestion_items: Vec<ListItem> = suggestions
+            .iter()
+            .enumerate()
+            .map(|(i, suggestion)| {
+                let style = if i == selected_index {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                ListItem::new(suggestion.clone()).style(style)
+            })
+            .collect();
 
-        let suggestions_list = List::new(suggestion_items)
-            .block(Block::default().borders(Borders::ALL).title("💡 Suggestions"))
-            .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan));
-        f.render_widget(suggestions_list, chunks[2]);
+        f.render_widget(
+            List::new(suggestion_items)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("💡 Suggestions"),
+                )
+                .highlight_style(Style::default().fg(Color::Black).bg(Color::Cyan)),
+            chunks[2],
+        );
 
-        // Help
-        let help_widget = Paragraph::new("↑↓ Select • Enter Confirm • Esc Cancel • q Quit")
-            .style(Style::default().fg(Color::Gray))
-            .block(Block::default().borders(Borders::ALL).title("⌨️ Controls"));
-        f.render_widget(help_widget, chunks[3]);
+        f.render_widget(
+            Paragraph::new("↑↓ Select • Enter Confirm • Esc Cancel • q Quit")
+                .style(Style::default().fg(Color::Gray))
+                .block(Block::default().borders(Borders::ALL).title("⌨️ Controls")),
+            chunks[3],
+        );
     }
 
-    fn render_error_static(f: &mut Frame, message: &str) {
+    fn render_error(f: &mut Frame, message: &str) {
         let area = f.size();
-        
         let popup_area = Rect {
             x: area.width / 8,
             y: area.height / 2 - 3,
@@ -679,79 +790,67 @@ impl UI {
         };
 
         f.render_widget(Clear, popup_area);
-
-        let wrapped_message = format!("{}\n\nPress any key to dismiss", message);
-        let error_widget = Paragraph::new(wrapped_message)
-            .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
-            .wrap(Wrap { trim: true })
-            .block(Block::default().borders(Borders::ALL).title("❌ Error"));
-        f.render_widget(error_widget, popup_area);
+        f.render_widget(
+            Paragraph::new(format!("{}\n\nPress any key to dismiss", message))
+                .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                .wrap(Wrap { trim: true })
+                .block(Block::default().borders(Borders::ALL).title("❌ Error")),
+            popup_area,
+        );
     }
 
     pub fn get_user_input(&mut self, state: &UIState) -> Result<UserAction> {
         loop {
             if let Event::Key(key) = event::read()? {
                 match state {
-                    UIState::URLInput { .. } => {
-                        match key.code {
-                            KeyCode::Esc => return Ok(UserAction::CancelInput),
-                            KeyCode::Enter => {
-                                if let UIState::URLInput { input } = state {
-                                    return Ok(UserAction::ConfirmInput(input.clone()));
-                                }
+                    UIState::URLInput { input } => match key.code {
+                        KeyCode::Esc => return Ok(UserAction::CancelInput),
+                        KeyCode::Enter => return Ok(UserAction::ConfirmInput(input.clone())),
+                        KeyCode::Backspace => return Ok(UserAction::Backspace),
+                        KeyCode::Char(c) => return Ok(UserAction::InputChar(c)),
+                        _ => continue,
+                    },
+                    UIState::History { .. } => return Ok(UserAction::GoBack),
+                    UIState::URLSuggestions { .. } => match key.code {
+                        KeyCode::Esc => return Ok(UserAction::CancelInput),
+                        KeyCode::Char('q') => return Ok(UserAction::Quit),
+                        KeyCode::Up => return Ok(UserAction::SelectPrevSuggestion),
+                        KeyCode::Down => return Ok(UserAction::SelectNextSuggestion),
+                        KeyCode::Enter => return Ok(UserAction::ConfirmSuggestion),
+                        _ => continue,
+                    },
+                    UIState::Error { .. } => return Ok(UserAction::DismissError),
+                    _ => match key.code {
+                        KeyCode::Char('q') => return Ok(UserAction::Quit),
+                        KeyCode::Char('b') => return Ok(UserAction::GoBack),
+                        KeyCode::Char('f') => return Ok(UserAction::GoForward),
+                        KeyCode::Char('h') => return Ok(UserAction::ShowHistory),
+                        KeyCode::Char('g') => return Ok(UserAction::EnterUrl),
+                        KeyCode::Char('r') => return Ok(UserAction::Refresh),
+                        KeyCode::Up if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                            return Ok(UserAction::SelectPrevLink)
+                        }
+                        KeyCode::Down if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                            return Ok(UserAction::SelectNextLink)
+                        }
+                        KeyCode::Up => return Ok(UserAction::ScrollUp),
+                        KeyCode::Down => return Ok(UserAction::ScrollDown),
+                        KeyCode::Enter => return Ok(UserAction::FollowSelectedLink),
+                        KeyCode::Char(c) if c.is_ascii_digit() => {
+                            let digit = c.to_digit(10).unwrap() as usize;
+                            if digit > 0 {
+                                return Ok(UserAction::FollowLink(digit));
                             }
-                            KeyCode::Backspace => return Ok(UserAction::Backspace),
-                            KeyCode::Char(c) => return Ok(UserAction::InputChar(c)),
-                            _ => continue,
                         }
-                    }
-                    UIState::History { .. } => {
-                        return Ok(UserAction::GoBack); // Any key returns from history
-                    }
-                    UIState::URLSuggestions { .. } => {
-                        match key.code {
-                            KeyCode::Esc => return Ok(UserAction::CancelInput),
-                            KeyCode::Char('q') => return Ok(UserAction::Quit),
-                            KeyCode::Up => return Ok(UserAction::SelectPrevSuggestion),
-                            KeyCode::Down => return Ok(UserAction::SelectNextSuggestion),
-                            KeyCode::Enter => return Ok(UserAction::ConfirmSuggestion),
-                            _ => continue,
-                        }
-                    }
-                    UIState::Error { .. } => {
-                        return Ok(UserAction::DismissError); // Any key dismisses error
-                    }
-                    _ => {
-                        match key.code {
-                            KeyCode::Char('q') => return Ok(UserAction::Quit),
-                            KeyCode::Char('b') => return Ok(UserAction::GoBack),
-                            KeyCode::Char('f') => return Ok(UserAction::GoForward),
-                            KeyCode::Char('h') => return Ok(UserAction::ShowHistory),
-                            KeyCode::Char('g') => return Ok(UserAction::EnterUrl),
-                            KeyCode::Char('r') => return Ok(UserAction::Refresh),
-                            KeyCode::Up if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) => return Ok(UserAction::SelectPrevLink),
-                            KeyCode::Down if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT) => return Ok(UserAction::SelectNextLink),
-                            KeyCode::Up => return Ok(UserAction::ScrollUp),
-                            KeyCode::Down => return Ok(UserAction::ScrollDown),
-                            KeyCode::Enter => return Ok(UserAction::FollowSelectedLink),
-                            KeyCode::Char(c) if c.is_ascii_digit() => {
-                                let digit = c.to_digit(10).unwrap() as usize;
-                                if digit > 0 {
-                                    return Ok(UserAction::FollowLink(digit));
-                                }
-                            }
-                            _ => continue,
-                        }
-                    }
+                        _ => continue,
+                    },
                 }
             }
         }
     }
 
     pub fn scroll_up(&mut self) {
-        if self.scroll_position > 0 {
-            self.scroll_position -= 1;
-        }
+        self.scroll_position = self.scroll_position.saturating_sub(1);
     }
 
     pub fn scroll_down(&mut self) {
@@ -773,23 +872,32 @@ impl UI {
             self.update_links_scroll();
         }
     }
-    
+
     fn update_links_scroll(&mut self) {
-        // Use conservative estimate when exact height isn't available
         self.update_links_scroll_with_height(10);
     }
-    
+
     fn update_links_scroll_with_height(&mut self, visible_height: usize) {
         if visible_height == 0 {
             return;
         }
-        
-        // Ensure selected link is visible
+
         if self.selected_link < self.links_scroll {
             self.links_scroll = self.selected_link;
         } else if self.selected_link >= self.links_scroll + visible_height {
             self.links_scroll = self.selected_link + 1 - visible_height;
         }
+    }
+
+    fn update_max_scroll(&mut self, summary: &str) {
+        let height = self.terminal.size().map(|s| s.height).unwrap_or(24);
+        let summary_height = height.saturating_sub(8);
+        let width =
+            (self.terminal.size().map(|s| s.width).unwrap_or(80) * 60 / 100).saturating_sub(4);
+        let wrapped_text = fill(summary, width as usize);
+        let lines_count = wrapped_text.lines().count();
+        let visible_height = summary_height as usize;
+        self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
     }
 
     pub fn get_selected_link(&self) -> usize {

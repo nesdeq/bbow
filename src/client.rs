@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use reqwest::Client;
 use std::time::Duration;
 
@@ -18,36 +18,35 @@ impl WebClient {
             .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
             .build()
             .expect("Failed to create HTTP client");
-        
+
         Self { client }
     }
-    
+
     pub async fn fetch(&self, url: &str) -> Result<String> {
-        let response = self.client
+        let response = self
+            .client
             .get(url)
             .send()
             .await
             .map_err(|e| anyhow!("Failed to fetch {}: {}", url, e))?;
-        
+
         if !response.status().is_success() {
             return Err(anyhow!("HTTP error {}: {}", response.status(), url));
         }
-        
+
         let content_type = response
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        
+
         if !content_type.contains("text/html") {
             return Err(anyhow!("Not an HTML page: {}", content_type));
         }
-        
-        let html = response
+
+        response
             .text()
             .await
-            .map_err(|e| anyhow!("Failed to read response body: {}", e))?;
-        
-        Ok(html)
+            .map_err(|e| anyhow!("Failed to read response body: {}", e))
     }
 }
