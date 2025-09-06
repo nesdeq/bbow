@@ -7,7 +7,7 @@ use crate::{
     history::History,
     links::{Link, LinkExtractor},
     openai::OpenAIClient,
-    ui::{HistoryEntry, UIState, UserAction, UI},
+    ui::{BrowserState, HistoryEntry, UIInterface, UserAction},
 };
 
 pub struct Browser {
@@ -15,26 +15,26 @@ pub struct Browser {
     extractor: TextExtractor,
     openai: OpenAIClient,
     link_extractor: LinkExtractor,
-    ui: UI,
+    ui: Box<dyn UIInterface>,
     history: History,
     current_url: Option<String>,
     current_links: Vec<Link>,
-    current_state: UIState,
+    current_state: BrowserState,
     url_input: String,
 }
 
 impl Browser {
-    pub fn new() -> Result<Self> {
+    pub fn new(ui: Box<dyn UIInterface>) -> Result<Self> {
         Ok(Self {
             client: WebClient::new(),
             extractor: TextExtractor::new(),
             openai: OpenAIClient::new()?,
             link_extractor: LinkExtractor::new(),
-            ui: UI::new()?,
+            ui,
             history: History::new(),
             current_url: None,
             current_links: Vec::new(),
-            current_state: UIState::Loading {
+            current_state: BrowserState::Loading {
                 url: "Starting...".to_string(),
                 progress: 0,
                 stage: "Initializing...".to_string(),
@@ -55,7 +55,7 @@ impl Browser {
             Ok((title, summary, links)) => {
                 self.current_links = links.clone();
                 self.history.add(normalized_url, title.clone());
-                self.current_state = UIState::Page {
+                self.current_state = BrowserState::Page {
                     url: self.current_url.as_ref().unwrap().clone(),
                     title,
                     summary,
@@ -77,7 +77,7 @@ impl Browser {
 
     async fn main_loop(&mut self) -> Result<()> {
         if self.current_url.is_none() {
-            self.current_state = UIState::URLInput {
+            self.current_state = BrowserState::URLInput {
                 input: String::new(),
             };
             self.ui.render(&self.current_state)?;
@@ -135,7 +135,7 @@ impl Browser {
     async fn handle_go_back(&mut self) -> Result<()> {
         if matches!(
             self.current_state,
-            UIState::History { .. } | UIState::Error { .. }
+            BrowserState::History { .. } | BrowserState::Error { .. }
         ) {
             self.return_to_page_with_message("Use 'r' to refresh for summary")?;
         } else if let Some(entry) = self.history.go_back() {
@@ -169,7 +169,7 @@ impl Browser {
             .current()
             .and_then(|current| entries.iter().position(|e| e.url == current.url));
 
-        self.current_state = UIState::History {
+        self.current_state = BrowserState::History {
             entries,
             current_index,
         };
@@ -178,7 +178,7 @@ impl Browser {
 
     fn enter_url_mode(&mut self) -> Result<()> {
         self.url_input.clear();
-        self.current_state = UIState::URLInput {
+        self.current_state = BrowserState::URLInput {
             input: self.url_input.clone(),
         };
         self.ui.render(&self.current_state)
@@ -190,7 +190,7 @@ impl Browser {
 
     fn return_to_page_with_message(&mut self, summary: &str) -> Result<()> {
         if let Some(current) = self.history.current() {
-            self.current_state = UIState::Page {
+            self.current_state = BrowserState::Page {
                 url: current.url.clone(),
                 title: current.title.clone(),
                 summary: summary.to_string(),
@@ -202,7 +202,7 @@ impl Browser {
     }
 
     async fn handle_refresh(&mut self) -> Result<()> {
-        if matches!(self.current_state, UIState::Error { .. }) {
+        if matches!(self.current_state, BrowserState::Error { .. }) {
             self.return_to_page()?;
         } else if let Some(url) = self.current_url.clone() {
             self.navigate(&url).await?;
@@ -232,7 +232,7 @@ impl Browser {
 
     fn handle_input_char(&mut self, c: char) -> Result<()> {
         self.url_input.push(c);
-        self.current_state = UIState::URLInput {
+        self.current_state = BrowserState::URLInput {
             input: self.url_input.clone(),
         };
         self.ui.render(&self.current_state)
@@ -240,14 +240,14 @@ impl Browser {
 
     fn handle_backspace(&mut self) -> Result<()> {
         self.url_input.pop();
-        self.current_state = UIState::URLInput {
+        self.current_state = BrowserState::URLInput {
             input: self.url_input.clone(),
         };
         self.ui.render(&self.current_state)
     }
 
     fn select_prev_suggestion(&mut self) -> Result<()> {
-        if let UIState::URLSuggestions {
+        if let BrowserState::URLSuggestions {
             original_url,
             error_message,
             suggestions,
@@ -259,7 +259,7 @@ impl Browser {
             } else {
                 suggestions.len().saturating_sub(1)
             };
-            self.current_state = UIState::URLSuggestions {
+            self.current_state = BrowserState::URLSuggestions {
                 original_url: original_url.clone(),
                 error_message: error_message.clone(),
                 suggestions: suggestions.clone(),
@@ -271,7 +271,7 @@ impl Browser {
     }
 
     fn select_next_suggestion(&mut self) -> Result<()> {
-        if let UIState::URLSuggestions {
+        if let BrowserState::URLSuggestions {
             original_url,
             error_message,
             suggestions,
@@ -283,7 +283,7 @@ impl Browser {
             } else {
                 0
             };
-            self.current_state = UIState::URLSuggestions {
+            self.current_state = BrowserState::URLSuggestions {
                 original_url: original_url.clone(),
                 error_message: error_message.clone(),
                 suggestions: suggestions.clone(),
@@ -295,7 +295,7 @@ impl Browser {
     }
 
     async fn confirm_suggestion(&mut self) -> Result<()> {
-        if let UIState::URLSuggestions {
+        if let BrowserState::URLSuggestions {
             suggestions,
             selected_index,
             ..
@@ -313,7 +313,7 @@ impl Browser {
         if self.history.current().is_some() {
             self.return_to_page()
         } else {
-            self.current_state = UIState::URLInput {
+            self.current_state = BrowserState::URLInput {
                 input: String::new(),
             };
             self.ui.render(&self.current_state)
@@ -362,7 +362,7 @@ impl Browser {
     }
 
     async fn update_loading_progress(&mut self, progress: u16, stage: &str) -> Result<()> {
-        if let UIState::Loading { url, .. } = &self.current_state {
+        if let BrowserState::Loading { url, .. } = &self.current_state {
             let url = url.clone();
             self.set_loading_state(url, progress, stage);
             self.ui.render(&self.current_state)?;
@@ -372,7 +372,7 @@ impl Browser {
     }
 
     fn set_loading_state(&mut self, url: String, progress: u16, stage: &str) {
-        self.current_state = UIState::Loading {
+        self.current_state = BrowserState::Loading {
             url,
             progress,
             stage: stage.to_string(),
@@ -382,7 +382,7 @@ impl Browser {
     async fn handle_navigation_error(&mut self, url: &str, error: anyhow::Error) -> Result<()> {
         match self.get_url_suggestions(url, &error.to_string()).await {
             Ok(suggestions) if !suggestions.is_empty() => {
-                self.current_state = UIState::URLSuggestions {
+                self.current_state = BrowserState::URLSuggestions {
                     original_url: url.to_string(),
                     error_message: error.to_string(),
                     suggestions,
@@ -391,7 +391,7 @@ impl Browser {
                 self.ui.render(&self.current_state)?;
             }
             _ => {
-                self.current_state = UIState::Error {
+                self.current_state = BrowserState::Error {
                     message: format!("Failed to load page: {}", error),
                 };
                 self.ui.render(&self.current_state)?;

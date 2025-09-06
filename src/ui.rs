@@ -19,16 +19,25 @@ use ratatui::{
 use std::io::{self, Stdout};
 use textwrap::fill;
 
-pub struct UI {
-    terminal: Terminal<CrosstermBackend<Stdout>>,
-    scroll_position: u16,
-    selected_link: usize,
-    links_scroll: usize,
-    max_scroll: u16,
+// UI Abstraction trait for decoupling browser from specific UI implementations
+pub trait UIInterface {
+    fn new() -> Result<Self>
+    where
+        Self: Sized;
+    fn cleanup(&mut self) -> Result<()>;
+    fn render(&mut self, state: &BrowserState) -> Result<()>;
+    fn get_user_input(&mut self, state: &BrowserState) -> Result<UserAction>;
+    fn reset_scroll(&mut self);
+    fn scroll_up(&mut self);
+    fn scroll_down(&mut self);
+    fn select_prev_link(&mut self, links_len: usize);
+    fn select_next_link(&mut self, links_len: usize);
+    fn get_selected_link(&self) -> usize;
 }
 
+// Browser state abstraction - decoupled from specific UI implementation
 #[derive(Debug, Clone)]
-pub enum UIState {
+pub enum BrowserState {
     Loading {
         url: String,
         progress: u16,
@@ -57,6 +66,15 @@ pub enum UIState {
         message: String,
     },
 }
+
+pub struct UI {
+    terminal: Terminal<CrosstermBackend<Stdout>>,
+    scroll_position: u16,
+    selected_link: usize,
+    links_scroll: usize,
+    max_scroll: u16,
+}
+
 
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
@@ -88,8 +106,8 @@ pub enum UserAction {
     DismissError,
 }
 
-impl UI {
-    pub fn new() -> Result<Self> {
+impl UIInterface for UI {
+    fn new() -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -105,7 +123,7 @@ impl UI {
         })
     }
 
-    pub fn cleanup(&mut self) -> Result<()> {
+    fn cleanup(&mut self) -> Result<()> {
         disable_raw_mode()?;
         execute!(
             self.terminal.backend_mut(),
@@ -116,9 +134,58 @@ impl UI {
         Ok(())
     }
 
-    pub fn render(&mut self, state: &UIState) -> Result<()> {
+    fn render(&mut self, state: &BrowserState) -> Result<()> {
+        self.render_internal(state)
+    }
+
+    fn get_user_input(&mut self, state: &BrowserState) -> Result<UserAction> {
+        self.get_user_input_internal(state)
+    }
+
+    fn reset_scroll(&mut self) {
+        self.scroll_position = 0;
+        self.selected_link = 0;
+        self.links_scroll = 0;
+    }
+
+    fn scroll_up(&mut self) {
+        self.scroll_position = self.scroll_position.saturating_sub(1);
+    }
+
+    fn scroll_down(&mut self) {
+        if self.scroll_position < self.max_scroll {
+            self.scroll_position += 1;
+        }
+    }
+
+    fn select_prev_link(&mut self, links_len: usize) {
+        if links_len > 0 && self.selected_link > 0 {
+            self.selected_link -= 1;
+            self.update_links_scroll();
+        }
+    }
+
+    fn select_next_link(&mut self, links_len: usize) {
+        if links_len > 0 && self.selected_link < links_len - 1 {
+            self.selected_link += 1;
+            self.update_links_scroll();
+        }
+    }
+
+    fn get_selected_link(&self) -> usize {
+        self.selected_link
+    }
+}
+
+impl UI {
+    // Legacy constructor for backward compatibility
+    pub fn new() -> Result<Self> {
+        UIInterface::new()
+    }
+
+    fn render_internal(&mut self, state: &BrowserState) -> Result<()> {
         match state {
-            UIState::Loading {
+            BrowserState::Loading {
                 url,
                 progress,
                 stage,
@@ -127,7 +194,7 @@ impl UI {
                 self.terminal
                     .draw(|f| Self::render_loading(f, &url, progress, &stage))?;
             }
-            UIState::Page {
+            BrowserState::Page {
                 url,
                 title,
                 summary,
@@ -156,7 +223,7 @@ impl UI {
                     self.terminal.size()?.height.saturating_sub(8) as usize,
                 );
             }
-            UIState::History {
+            BrowserState::History {
                 entries,
                 current_index,
             } => {
@@ -164,11 +231,11 @@ impl UI {
                 self.terminal
                     .draw(|f| Self::render_history(f, &entries, current_index))?;
             }
-            UIState::URLInput { input } => {
+            BrowserState::URLInput { input } => {
                 let input = input.clone();
                 self.terminal.draw(|f| Self::render_url_input(f, &input))?;
             }
-            UIState::URLSuggestions {
+            BrowserState::URLSuggestions {
                 original_url,
                 error_message,
                 suggestions,
@@ -190,7 +257,7 @@ impl UI {
                     );
                 })?;
             }
-            UIState::Error { message } => {
+            BrowserState::Error { message } => {
                 let message = message.clone();
                 self.terminal.draw(|f| Self::render_error(f, &message))?;
             }
@@ -799,19 +866,20 @@ impl UI {
         );
     }
 
-    pub fn get_user_input(&mut self, state: &UIState) -> Result<UserAction> {
+
+    fn get_user_input_internal(&mut self, state: &BrowserState) -> Result<UserAction> {
         loop {
             if let Event::Key(key) = event::read()? {
                 match state {
-                    UIState::URLInput { input } => match key.code {
+                    BrowserState::URLInput { input } => match key.code {
                         KeyCode::Esc => return Ok(UserAction::CancelInput),
                         KeyCode::Enter => return Ok(UserAction::ConfirmInput(input.clone())),
                         KeyCode::Backspace => return Ok(UserAction::Backspace),
                         KeyCode::Char(c) => return Ok(UserAction::InputChar(c)),
                         _ => continue,
                     },
-                    UIState::History { .. } => return Ok(UserAction::GoBack),
-                    UIState::URLSuggestions { .. } => match key.code {
+                    BrowserState::History { .. } => return Ok(UserAction::GoBack),
+                    BrowserState::URLSuggestions { .. } => match key.code {
                         KeyCode::Esc => return Ok(UserAction::CancelInput),
                         KeyCode::Char('q') => return Ok(UserAction::Quit),
                         KeyCode::Up => return Ok(UserAction::SelectPrevSuggestion),
@@ -819,7 +887,7 @@ impl UI {
                         KeyCode::Enter => return Ok(UserAction::ConfirmSuggestion),
                         _ => continue,
                     },
-                    UIState::Error { .. } => return Ok(UserAction::DismissError),
+                    BrowserState::Error { .. } => return Ok(UserAction::DismissError),
                     _ => match key.code {
                         KeyCode::Char('q') => return Ok(UserAction::Quit),
                         KeyCode::Char('b') => return Ok(UserAction::GoBack),
@@ -849,29 +917,6 @@ impl UI {
         }
     }
 
-    pub fn scroll_up(&mut self) {
-        self.scroll_position = self.scroll_position.saturating_sub(1);
-    }
-
-    pub fn scroll_down(&mut self) {
-        if self.scroll_position < self.max_scroll {
-            self.scroll_position += 1;
-        }
-    }
-
-    pub fn select_prev_link(&mut self, links_len: usize) {
-        if links_len > 0 && self.selected_link > 0 {
-            self.selected_link -= 1;
-            self.update_links_scroll();
-        }
-    }
-
-    pub fn select_next_link(&mut self, links_len: usize) {
-        if links_len > 0 && self.selected_link < links_len - 1 {
-            self.selected_link += 1;
-            self.update_links_scroll();
-        }
-    }
 
     fn update_links_scroll(&mut self) {
         self.update_links_scroll_with_height(10);
@@ -900,13 +945,4 @@ impl UI {
         self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
     }
 
-    pub fn get_selected_link(&self) -> usize {
-        self.selected_link
-    }
-
-    pub fn reset_scroll(&mut self) {
-        self.scroll_position = 0;
-        self.selected_link = 0;
-        self.links_scroll = 0;
-    }
 }
