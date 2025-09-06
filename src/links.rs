@@ -86,11 +86,12 @@ impl LinkExtractor {
             return combined;
         }
 
-        for attr in &["title", "aria-label"] {
+        // Try fallback attributes
+        for &attr in &["title", "aria-label"] {
             if let Some(value) = element.value().attr(attr) {
-                let value = value.trim();
-                if !value.is_empty() && !value.starts_with('<') {
-                    return value.to_string();
+                let trimmed = value.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with('<') {
+                    return trimmed.to_string();
                 }
             }
         }
@@ -110,7 +111,10 @@ impl LinkExtractor {
     }
 
     fn is_noise_link(&self, text: &str, url: &str) -> bool {
-        if text == "<no-text>" || text.trim().starts_with('<') || text.trim().len() < 2 {
+        let trimmed_text = text.trim();
+
+        // Quick checks first
+        if text == "<no-text>" || trimmed_text.starts_with('<') || trimmed_text.len() < 2 {
             return true;
         }
 
@@ -118,7 +122,33 @@ impl LinkExtractor {
             return true;
         }
 
-        let text_lower = text.to_lowercase();
+        // Check URL patterns (often faster than text patterns)
+        let url_lower = url.to_lowercase();
+        if self.is_noise_url(&url_lower) {
+            return true;
+        }
+
+        // Only check text patterns if needed
+        if text.len() < 20 {
+            let text_lower = text.to_lowercase();
+            self.contains_noise_pattern(&text_lower)
+        } else {
+            false
+        }
+    }
+
+    fn is_noise_url(&self, url_lower: &str) -> bool {
+        const IMAGE_EXTENSIONS: &[&str] = &[
+            ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".bmp", ".ico",
+        ];
+
+        IMAGE_EXTENSIONS.iter().any(|&ext| url_lower.ends_with(ext))
+            || url_lower.starts_with("data:")
+            || url_lower.starts_with("javascript:")
+            || (url_lower.contains('#') && !url_lower.contains("http"))
+    }
+
+    fn contains_noise_pattern(&self, text_lower: &str) -> bool {
         const NOISE_PATTERNS: &[&str] = &[
             "skip to",
             "skip navigation",
@@ -146,22 +176,9 @@ impl LinkExtractor {
             "toggle",
         ];
 
-        if text.len() < 20 && NOISE_PATTERNS.iter().any(|&p| text_lower.contains(p)) {
-            return true;
-        }
-
-        let url_lower = url.to_lowercase();
-        const IMAGE_EXTENSIONS: &[&str] = &[
-            ".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".bmp", ".ico",
-        ];
-
-        if IMAGE_EXTENSIONS.iter().any(|&ext| url_lower.ends_with(ext)) {
-            return true;
-        }
-
-        url_lower.starts_with("data:")
-            || url_lower.starts_with("javascript:")
-            || (url_lower.contains('#') && !url_lower.contains("http"))
+        NOISE_PATTERNS
+            .iter()
+            .any(|&pattern| text_lower.contains(pattern))
     }
 
     fn clean_link_text(&self, text: &str) -> String {

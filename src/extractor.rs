@@ -9,33 +9,17 @@ impl TextExtractor {
     }
 
     pub fn extract_text(&self, html: &str) -> Result<String> {
-        let clean_html = self.remove_scripts_and_styles(html);
-        let clean_doc = Html::parse_document(&clean_html);
+        let doc = Html::parse_document(html);
+        let title = self.extract_title(&doc);
+        let content = self.extract_main_content(&doc);
 
-        let title = self.extract_title(&clean_doc);
-        let content = self.extract_main_content(&clean_doc);
-
-        let mut result = String::new();
-        if !title.is_empty() {
-            result.push_str(&format!("# {}\n\n", title));
-        }
-        result.push_str(&content);
+        let result = if title.is_empty() {
+            content
+        } else {
+            format!("# {}\n\n{}", title, content)
+        };
 
         Ok(self.clean_text(&result))
-    }
-
-    fn remove_scripts_and_styles(&self, html: &str) -> String {
-        let script_selector = Selector::parse("script, style, noscript").unwrap();
-        let mut clean_html = html.to_string();
-
-        let doc = Html::parse_document(&clean_html);
-        for element in doc.select(&script_selector) {
-            if let Some(html_content) = element.html().get(..) {
-                clean_html = clean_html.replace(html_content, "");
-            }
-        }
-
-        clean_html
     }
 
     fn extract_title(&self, document: &Html) -> String {
@@ -58,20 +42,23 @@ impl TextExtractor {
             "#content",
         ];
 
-        for selector_str in MAIN_SELECTORS {
+        // Try main content selectors first
+        for &selector_str in MAIN_SELECTORS {
             if let Ok(selector) = Selector::parse(selector_str) {
-                if let Some(main_element) = document.select(&selector).next() {
-                    return self.extract_text_from_element(main_element);
+                if let Some(element) = document.select(&selector).next() {
+                    return self.extract_text_from_element(element);
                 }
             }
         }
 
-        let body_selector = Selector::parse("body").unwrap();
-        document
-            .select(&body_selector)
-            .next()
-            .map(|body| self.extract_text_from_element(body))
-            .unwrap_or_else(|| document.root_element().text().collect::<String>())
+        // Fallback to body, then root
+        if let Ok(body_selector) = Selector::parse("body") {
+            if let Some(body) = document.select(&body_selector).next() {
+                return self.extract_text_from_element(body);
+            }
+        }
+
+        document.root_element().text().collect::<String>()
     }
 
     fn extract_text_from_element(&self, element: scraper::ElementRef) -> String {
@@ -100,6 +87,7 @@ impl TextExtractor {
     }
 
     fn clean_text(&self, text: &str) -> String {
+        // Single pass optimization: combine operations
         text.lines()
             .map(|line| line.trim())
             .filter(|line| !line.is_empty())

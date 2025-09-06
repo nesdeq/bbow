@@ -2,8 +2,9 @@
 // Embodying principles of simplicity, elegance, and focus on content
 
 use crate::links::Link;
-use crate::markdown::{parse_markdown_to_structured, render_structured_to_lines, MarkdownElement};
+use crate::markdown::MarkdownElement;
 use crate::ui::{BrowserState, HistoryEntry, UIInterface, UserAction};
+use crate::ui_common;
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -380,30 +381,23 @@ impl JonyUI {
 
     fn render_summary(f: &mut Frame, area: Rect, summary: &str, scroll_pos: u16) {
         let width = area.width.saturating_sub(2) as usize;
-        let parsed_lines = parse_markdown_to_structured(summary, width);
-        let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
+        let visible_height = area.height as usize;
 
-        // If there are no lines, render empty content
-        if lines.is_empty() {
+        let visible_lines = ui_common::get_visible_markdown_lines(
+            summary,
+            width,
+            scroll_pos,
+            visible_height,
+            Self::style_markdown_element,
+        );
+
+        // If no content, render empty
+        if visible_lines.is_empty() {
             f.render_widget(Paragraph::new("").style(Style::default().fg(CONTENT)), area);
             return;
         }
 
-        let visible_height = area.height as usize;
-        let start_index = if lines.is_empty() {
-            0
-        } else {
-            (scroll_pos as usize).min(lines.len() - 1)
-        };
-        let end_index = (start_index + visible_height).min(lines.len());
-        let visible_lines = if start_index < lines.len() {
-            lines[start_index..end_index].to_vec()
-        } else {
-            Vec::new()
-        };
-
         // Clean content area without borders - Jony Ive minimalism
-        // Ensure we don't crash on oversized content by adding bounds checking
         f.render_widget(
             Paragraph::new(visible_lines)
                 .style(Style::default().fg(CONTENT))
@@ -412,10 +406,17 @@ impl JonyUI {
         );
 
         // Subtle scroll indicator if needed
-        if lines.len() > visible_height && area.width > 0 && area.height > 1 {
-            let max_scroll_for_indicator = (lines.len().saturating_sub(visible_height)).max(1);
-            let scroll_pos_ratio = (scroll_pos as f32 / max_scroll_for_indicator as f32).min(1.0);
-            let indicator_y_offset = (scroll_pos_ratio * (area.height.saturating_sub(1)) as f32) as u16;
+        let max_scroll = ui_common::calculate_max_scroll_for_markdown(
+            summary,
+            width,
+            visible_height,
+            Self::style_markdown_element,
+        );
+
+        if max_scroll > 0 && area.width > 0 && area.height > 1 {
+            let scroll_pos_ratio = (scroll_pos as f32 / max_scroll as f32).min(1.0);
+            let indicator_y_offset =
+                (scroll_pos_ratio * (area.height.saturating_sub(1)) as f32) as u16;
             let indicator_y = area.y + indicator_y_offset;
 
             // Ensure the indicator position is within bounds
@@ -749,33 +750,27 @@ impl JonyUI {
     }
 
     fn update_links_scroll_with_height(&mut self, visible_height: usize) {
-        if visible_height == 0 {
-            return;
-        }
-
-        if self.selected_link < self.links_scroll {
-            self.links_scroll = self.selected_link;
-        } else if self.selected_link >= self.links_scroll + visible_height {
-            self.links_scroll = self.selected_link + 1 - visible_height;
-        }
+        self.links_scroll =
+            ui_common::update_links_scroll(self.selected_link, self.links_scroll, visible_height);
     }
 
     fn update_max_scroll(&mut self, summary: &str) {
-        // Calculate dimensions matching what render_summary actually uses
-        let terminal_size = self.terminal.size().unwrap_or(ratatui::layout::Rect::new(0, 0, 80, 24));
-        
-        // Match the layout calculation from render_page
-        let content_height = terminal_size.height.saturating_sub(1 + 4 + 2); // margin + header + footer
-        let content_width = terminal_size.width.saturating_sub(2) * 75 / 100; // 75% for content area
-        
+        let terminal_size = self
+            .terminal
+            .size()
+            .unwrap_or(ratatui::layout::Rect::new(0, 0, 80, 24));
+
         // Match render_summary calculations exactly
+        let content_width = terminal_size.width.saturating_sub(2) * 75 / 100; // 75% for content area
         let width = content_width.saturating_sub(2) as usize; // same as area.width.saturating_sub(2)
+        let content_height = terminal_size.height.saturating_sub(1 + 4 + 2); // margin + header + footer
         let visible_height = content_height as usize; // same as area.height
-        
-        // Use the same markdown parsing as render_summary to get accurate line count
-        let parsed_lines = parse_markdown_to_structured(summary, width);
-        let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
-        let lines_count = lines.len();
-        self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
+
+        self.max_scroll = ui_common::calculate_max_scroll_for_markdown(
+            summary,
+            width,
+            visible_height,
+            Self::style_markdown_element,
+        );
     }
 }

@@ -1,5 +1,6 @@
 use crate::links::Link;
-use crate::markdown::{parse_markdown_to_structured, render_structured_to_lines, MarkdownElement};
+use crate::markdown::MarkdownElement;
+use crate::ui_common;
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -375,23 +376,24 @@ impl UI {
 
     fn render_summary(f: &mut Frame, area: Rect, summary: &str, scroll_pos: u16) {
         let width = area.width.saturating_sub(4) as usize;
-        let parsed_lines = parse_markdown_to_structured(summary, width);
-        let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
-
         let visible_height = area.height.saturating_sub(2) as usize;
-        let max_scroll = lines.len().saturating_sub(visible_height) as u16;
 
-        let start_index = if lines.is_empty() {
-            0
-        } else {
-            (scroll_pos as usize).min(lines.len() - 1)
-        };
-        let end_index = (start_index + visible_height).min(lines.len());
-        let visible_lines = if start_index < lines.len() {
-            lines[start_index..end_index].to_vec()
-        } else {
-            Vec::new()
-        };
+        let visible_lines = ui_common::get_visible_markdown_lines(
+            summary,
+            width,
+            scroll_pos,
+            visible_height,
+            Self::style_markdown_element,
+        );
+
+        let max_scroll = ui_common::calculate_max_scroll_for_markdown(
+            summary,
+            width,
+            visible_height,
+            Self::style_markdown_element,
+        );
+
+        let content_length = visible_lines.len() + max_scroll as usize;
 
         f.render_widget(
             Paragraph::new(visible_lines)
@@ -411,7 +413,7 @@ impl UI {
                 .begin_symbol(None)
                 .end_symbol(None);
             let mut scrollbar_state = ScrollbarState::default()
-                .content_length(lines.len())
+                .content_length(content_length)
                 .position(scroll_pos as usize);
             f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
         }
@@ -793,33 +795,27 @@ impl UI {
     }
 
     fn update_links_scroll_with_height(&mut self, visible_height: usize) {
-        if visible_height == 0 {
-            return;
-        }
-
-        if self.selected_link < self.links_scroll {
-            self.links_scroll = self.selected_link;
-        } else if self.selected_link >= self.links_scroll + visible_height {
-            self.links_scroll = self.selected_link + 1 - visible_height;
-        }
+        self.links_scroll =
+            ui_common::update_links_scroll(self.selected_link, self.links_scroll, visible_height);
     }
 
     fn update_max_scroll(&mut self, summary: &str) {
-        // Calculate dimensions matching what render_summary actually uses
-        let terminal_size = self.terminal.size().unwrap_or(ratatui::layout::Rect::new(0, 0, 80, 24));
-        
-        // Match the layout calculation from render_page
-        let main_content_height = terminal_size.height.saturating_sub(5 + 3); // header + footer 
+        let terminal_size = self
+            .terminal
+            .size()
+            .unwrap_or(ratatui::layout::Rect::new(0, 0, 80, 24));
+
+        // Match render_summary calculations exactly
         let content_width = terminal_size.width * 80 / 100; // 80% for content area
-        
-        // Match render_summary calculations exactly  
         let width = content_width.saturating_sub(4) as usize; // same as area.width.saturating_sub(4)
+        let main_content_height = terminal_size.height.saturating_sub(5 + 3); // header + footer
         let visible_height = main_content_height.saturating_sub(2) as usize; // same as area.height.saturating_sub(2)
-        
-        // Use the same markdown parsing as render_summary to get accurate line count
-        let parsed_lines = parse_markdown_to_structured(summary, width);
-        let lines = render_structured_to_lines(&parsed_lines, Self::style_markdown_element);
-        let lines_count = lines.len();
-        self.max_scroll = lines_count.saturating_sub(visible_height) as u16;
+
+        self.max_scroll = ui_common::calculate_max_scroll_for_markdown(
+            summary,
+            width,
+            visible_height,
+            Self::style_markdown_element,
+        );
     }
 }

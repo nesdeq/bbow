@@ -247,30 +247,29 @@ impl Browser {
     }
 
     fn select_prev_suggestion(&mut self) -> Result<()> {
-        if let BrowserState::URLSuggestions {
-            original_url,
-            error_message,
-            suggestions,
-            selected_index,
-        } = &self.current_state
-        {
-            let new_index = if *selected_index > 0 {
-                *selected_index - 1
+        self.update_suggestion_selection(|current, len| {
+            if current > 0 {
+                current - 1
             } else {
-                suggestions.len().saturating_sub(1)
-            };
-            self.current_state = BrowserState::URLSuggestions {
-                original_url: original_url.clone(),
-                error_message: error_message.clone(),
-                suggestions: suggestions.clone(),
-                selected_index: new_index,
-            };
-            self.ui.render(&self.current_state)?;
-        }
-        Ok(())
+                len.saturating_sub(1)
+            }
+        })
     }
 
     fn select_next_suggestion(&mut self) -> Result<()> {
+        self.update_suggestion_selection(|current, len| {
+            if current < len.saturating_sub(1) {
+                current + 1
+            } else {
+                0
+            }
+        })
+    }
+
+    fn update_suggestion_selection<F>(&mut self, selector: F) -> Result<()>
+    where
+        F: FnOnce(usize, usize) -> usize,
+    {
         if let BrowserState::URLSuggestions {
             original_url,
             error_message,
@@ -278,11 +277,7 @@ impl Browser {
             selected_index,
         } = &self.current_state
         {
-            let new_index = if *selected_index < suggestions.len().saturating_sub(1) {
-                *selected_index + 1
-            } else {
-                0
-            };
+            let new_index = selector(*selected_index, suggestions.len());
             self.current_state = BrowserState::URLSuggestions {
                 original_url: original_url.clone(),
                 error_message: error_message.clone(),
@@ -414,38 +409,53 @@ impl Browser {
     fn generate_fallback_suggestions(&self, failed_url: &str) -> Vec<String> {
         let clean_input = failed_url.trim();
         let url_lower = failed_url.to_lowercase();
-        let mut suggestions = Vec::new();
 
-        if url_lower.starts_with("http") {
-            if !url_lower.contains("www.") {
-                if let Ok(parsed) = Url::parse(&url_lower) {
-                    if let Some(host) = parsed.host_str() {
-                        suggestions.push(format!(
-                            "{}://www.{}{}",
-                            parsed.scheme(),
-                            host,
-                            parsed.path()
-                        ));
-                    }
-                }
-            }
+        let suggestions = if url_lower.starts_with("http") {
+            self.suggest_www_variants(&url_lower)
         } else if !clean_input.contains('.') {
-            for ext in &["com", "org", "net", "io"] {
-                suggestions.push(format!("https://www.{}.{}", clean_input, ext));
-                if ext == &"com" || ext == &"io" {
-                    suggestions.push(format!("https://{}.{}", clean_input, ext));
-                }
-            }
+            self.suggest_domain_extensions(clean_input)
         } else {
-            for prefix in &["https://www.", "https://", "http://www.", "http://"] {
-                suggestions.push(format!("{}{}", prefix, clean_input));
-            }
-        }
+            self.suggest_protocol_variants(clean_input)
+        };
 
         suggestions
             .into_iter()
             .filter(|url| self.is_valid_url_format(url))
             .take(5)
+            .collect()
+    }
+
+    fn suggest_www_variants(&self, url_lower: &str) -> Vec<String> {
+        if !url_lower.contains("www.") {
+            if let Ok(parsed) = Url::parse(url_lower) {
+                if let Some(host) = parsed.host_str() {
+                    return vec![format!(
+                        "{}://www.{}{}",
+                        parsed.scheme(),
+                        host,
+                        parsed.path()
+                    )];
+                }
+            }
+        }
+        Vec::new()
+    }
+
+    fn suggest_domain_extensions(&self, clean_input: &str) -> Vec<String> {
+        let mut suggestions = Vec::new();
+        for ext in &["com", "org", "net", "io"] {
+            suggestions.push(format!("https://www.{}.{}", clean_input, ext));
+            if matches!(ext, &"com" | &"io") {
+                suggestions.push(format!("https://{}.{}", clean_input, ext));
+            }
+        }
+        suggestions
+    }
+
+    fn suggest_protocol_variants(&self, clean_input: &str) -> Vec<String> {
+        ["https://www.", "https://", "http://www.", "http://"]
+            .iter()
+            .map(|prefix| format!("{}{}", prefix, clean_input))
             .collect()
     }
 

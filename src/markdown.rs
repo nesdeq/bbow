@@ -229,56 +229,25 @@ where
             ));
         }
 
-        // For headers, combine all text and apply header styling
-        // For bullets and normal text, preserve inline formatting
+        // Apply line-specific styling
         match &parsed_line.line_type {
-            LineType::Header1 => {
+            LineType::Header1 | LineType::Header2 | LineType::Header3 | LineType::Header4 => {
                 let combined_text = parsed_line
                     .elements
                     .iter()
                     .map(element_text)
                     .collect::<Vec<_>>()
                     .join("");
-                spans.push(Span::styled(
-                    combined_text,
-                    styler(&MarkdownElement::Header1(String::new())),
-                ));
-            }
-            LineType::Header2 => {
-                let combined_text = parsed_line
-                    .elements
-                    .iter()
-                    .map(element_text)
-                    .collect::<Vec<_>>()
-                    .join("");
-                spans.push(Span::styled(
-                    combined_text,
-                    styler(&MarkdownElement::Header2(String::new())),
-                ));
-            }
-            LineType::Header3 => {
-                let combined_text = parsed_line
-                    .elements
-                    .iter()
-                    .map(element_text)
-                    .collect::<Vec<_>>()
-                    .join("");
-                spans.push(Span::styled(
-                    combined_text,
-                    styler(&MarkdownElement::Header3(String::new())),
-                ));
-            }
-            LineType::Header4 => {
-                let combined_text = parsed_line
-                    .elements
-                    .iter()
-                    .map(element_text)
-                    .collect::<Vec<_>>()
-                    .join("");
-                spans.push(Span::styled(
-                    combined_text,
-                    styler(&MarkdownElement::Header4(String::new())),
-                ));
+
+                let header_element = match &parsed_line.line_type {
+                    LineType::Header1 => MarkdownElement::Header1(String::new()),
+                    LineType::Header2 => MarkdownElement::Header2(String::new()),
+                    LineType::Header3 => MarkdownElement::Header3(String::new()),
+                    LineType::Header4 => MarkdownElement::Header4(String::new()),
+                    _ => unreachable!(), // We're in a header match arm
+                };
+
+                spans.push(Span::styled(combined_text, styler(&header_element)));
             }
             _ => {
                 // For bullets and normal text, preserve individual element formatting
