@@ -1,6 +1,6 @@
+use super::{BrowserState, HistoryEntry, UIInterface, UserAction};
+use crate::common::{markdown::MarkdownElement, ui as ui_common};
 use crate::links::Link;
-use crate::markdown::MarkdownElement;
-use crate::ui_common;
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
@@ -21,90 +21,12 @@ use ratatui::{
 use std::io::{self, Stdout};
 use textwrap::fill;
 
-// UI Abstraction trait for decoupling browser from specific UI implementations
-pub trait UIInterface {
-    fn new() -> Result<Self>
-    where
-        Self: Sized;
-    fn cleanup(&mut self) -> Result<()>;
-    fn render(&mut self, state: &BrowserState) -> Result<()>;
-    fn get_user_input(&mut self, state: &BrowserState) -> Result<UserAction>;
-    fn reset_scroll(&mut self);
-    fn scroll_up(&mut self);
-    fn scroll_down(&mut self);
-    fn select_prev_link(&mut self, links_len: usize);
-    fn select_next_link(&mut self, links_len: usize);
-    fn get_selected_link(&self) -> usize;
-}
-
-// Browser state abstraction - decoupled from specific UI implementation
-#[derive(Debug, Clone)]
-pub enum BrowserState {
-    Loading {
-        url: String,
-        progress: u16,
-        stage: String,
-    },
-    Page {
-        url: String,
-        title: String,
-        summary: String,
-        links: Vec<Link>,
-    },
-    History {
-        entries: Vec<HistoryEntry>,
-        current_index: Option<usize>,
-    },
-    URLInput {
-        input: String,
-    },
-    URLSuggestions {
-        original_url: String,
-        error_message: String,
-        suggestions: Vec<String>,
-        selected_index: usize,
-    },
-    Error {
-        message: String,
-    },
-}
-
 pub struct UI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     scroll_position: u16,
     selected_link: usize,
     links_scroll: usize,
     max_scroll: u16,
-}
-
-#[derive(Debug, Clone)]
-pub struct HistoryEntry {
-    pub url: String,
-    pub title: String,
-}
-
-#[derive(Debug)]
-pub enum UserAction {
-    FollowLink(usize),
-    GoBack,
-    GoForward,
-    ShowHistory,
-    EnterUrl,
-    Refresh,
-    Quit,
-    ScrollUp,
-    ScrollDown,
-    SelectPrevLink,
-    SelectNextLink,
-    FollowSelectedLink,
-    ConfirmInput(String),
-    CancelInput,
-    InputChar(char),
-    Backspace,
-    SelectPrevSuggestion,
-    SelectNextSuggestion,
-    ConfirmSuggestion,
-    DismissError,
 }
 
 impl UIInterface for UI {

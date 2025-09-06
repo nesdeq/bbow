@@ -1,10 +1,9 @@
 // Jony Ive-inspired UI for BBOW
 // Embodying principles of simplicity, elegance, and focus on content
 
+use super::{BrowserState, HistoryEntry, UIInterface, UserAction};
+use crate::common::{markdown::MarkdownElement, ui as ui_common};
 use crate::links::Link;
-use crate::markdown::MarkdownElement;
-use crate::ui::{BrowserState, HistoryEntry, UIInterface, UserAction};
-use crate::ui_common;
 use anyhow::Result;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},

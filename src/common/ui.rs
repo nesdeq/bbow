@@ -1,7 +1,9 @@
 // Common utilities shared between UI implementations
 // This reduces code duplication between different UI themes
 
-use crate::markdown::{parse_markdown_to_structured, render_structured_to_lines, MarkdownElement};
+use crate::common::markdown::{
+    parse_markdown_to_structured, render_structured_to_lines, MarkdownElement,
+};
 use ratatui::{style::Style, text::Line};
 
 /// Calculate scroll bounds safely to prevent crashes

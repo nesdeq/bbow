@@ -1,21 +1,18 @@
 mod browser;
 mod client;
+mod common;
 mod extractor;
 mod history;
-mod jony;
 mod links;
-mod markdown;
 mod openai;
 mod ui;
-mod ui_common;
 
 use anyhow::{anyhow, Result};
 use browser::Browser;
 use clap::Parser;
 
 // Import UI traits and implementations
-use jony::JonyUI;
-use ui::UIInterface;
+use ui::{default::UI as DefaultUI, jony::JonyUI, UIInterface};
 
 #[derive(Parser)]
 #[command(name = "bbow", about = "A CLI browser with AI-powered summaries")]
@@ -34,7 +31,7 @@ const AVAILABLE_UIS: &[(&str, &str)] = &[
 
 fn create_ui(ui_name: &str) -> Result<Box<dyn UIInterface>> {
     match ui_name {
-        "default" => Ok(Box::new(ui::UI::new()?)),
+        "default" => Ok(Box::new(DefaultUI::new()?)),
         "jony" => Ok(Box::new(JonyUI::new()?)),
         _ => {
             let available: Vec<String> = AVAILABLE_UIS
