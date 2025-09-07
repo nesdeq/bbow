@@ -3,7 +3,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::env;
 
-const OPENAI_MODEL: &str = "gpt-4o-mini";
+const OPENAI_MODEL: &str = "gpt-4.1-mini";
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
 const MAX_TOKENS: u32 = 500;
 const TEMPERATURE: f32 = 0.3;
